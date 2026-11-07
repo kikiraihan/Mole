@@ -16,8 +16,13 @@ enum Palette {
     static let ember = Color(red: 0.851, green: 0.325, blue: 0.310) // #D9534F kritis
     static let loam = Color(red: 0.361, green: 0.290, blue: 0.239)  // #5C4A3D tanah
 
-    static func level(_ pct: Double) -> Color {
-        pct >= 85 ? ember : (pct >= 65 ? amber : moss)
+    static func level(_ pct: Double, warn: Double = 65, crit: Double = 85) -> Color {
+        pct >= crit ? ember : (pct >= warn ? amber : moss)
+    }
+
+    /// Disk wajar terisi 70%; peringatan baru muncul saat ruang mulai sempit.
+    static func diskLevel(_ pct: Double) -> Color {
+        level(pct, warn: 80, crit: 90)
     }
 
     static func health(_ score: Int) -> Color {
@@ -574,7 +579,7 @@ struct SidebarLive: View {
         VStack(alignment: .leading, spacing: 8) {
             Meter(label: "CPU", value: String(format: "%.0f%%", live.cpu), fraction: live.cpu / 100, tint: Palette.level(live.cpu))
             Meter(label: "RAM", value: String(format: "%.0f%%", live.memPercent), fraction: live.memPercent / 100, tint: Palette.level(live.memPercent))
-            Meter(label: "Disk", value: "\(formatBytes(live.disk.free)) sisa", fraction: live.disk.percent / 100, tint: Palette.level(live.disk.percent))
+            Meter(label: "Disk", value: "\(formatBytes(live.disk.free)) sisa", fraction: live.disk.percent / 100, tint: Palette.diskLevel(live.disk.percent))
         }
         .padding(12)
     }
@@ -734,7 +739,7 @@ struct StatusView: View {
                         label: jStr(disk, "mount"),
                         value: "\(formatBytes(Int64(jNum(disk, "used")))) / \(formatBytes(Int64(jNum(disk, "total"))))",
                         fraction: pct / 100,
-                        tint: Palette.level(pct)
+                        tint: Palette.diskLevel(pct)
                     )
                     Text("Sisa \(formatBytes(Int64(jNum(disk, "total") - jNum(disk, "used")))), \(jStr(disk, "fstype"))")
                         .font(.caption).foregroundStyle(.secondary)

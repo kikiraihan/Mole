@@ -82,7 +82,7 @@ struct PopoverView: View {
                     label: live.disk.name,
                     value: "\(formatBytes(live.disk.free)) sisa",
                     fraction: live.disk.percent / 100,
-                    tint: Palette.level(live.disk.percent)
+                    tint: Palette.diskLevel(live.disk.percent)
                 )
                 HStack {
                     Label(formatNetRate(live.netDown), systemImage: "arrow.down")
