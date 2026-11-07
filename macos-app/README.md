@@ -1,18 +1,22 @@
 # MoleApp — macOS Menu Bar Indicator & Full Mac App untuk Mole CLI
 
 Aplikasi macOS **ringan** berbasis **Swift + SwiftUI + AppKit** yang menggabungkan:
-1. **macOS Menu Bar Indicator** (seperti [LiteMonitor](https://github.com/kikiraihan/mac-os-lite-monitor) & [LiteCalendar](https://github.com/kikiraihan/our-life-planner-calendar-mac-os)) untuk memantau CPU, RAM, sisa SSD, kecepatan jaringan, baterai, dan Health Score secara real-time beserta tombol Quick Actions.
-2. **Mac App Dashboard Lengkap** yang membungkus seluruh fitur utama **Mole CLI (`mo`)** ke dalam antarmuka visual yang aman, lengkap dengan pratinjau `--dry-run` dan integrasi Terminal interaktif:
-   - **Status & Monitor (`mo status --json`)**: Skor kesehatan Mac, detail hardware, suhu/daya, dan tabel Top Processes.
-   - **Deep Clean (`mo clean`)**: Pratinjau `--dry-run`, daftar path kandidat `~/.config/mole/clean-list.txt`, proteksi satu-klik ke Whitelist, serta pembersihan user-level maupun full system via Terminal.
-   - **Uninstall Apps (`mo uninstall`)**: Daftar seluruh aplikasi terinstal (`--list`) dengan ikon asli macOS, pencarian instan, pratinjau sisa file (`--dry-run`), dan penghapusan aman ke Trash.
-   - **Disk Analyzer (`mo analyze --json`)**: Penjelajah pemakaian ruang disk per folder, penanda cache yang aman dibersihkan (`Cleanable Cache`), daftar file terbesar, buka di Finder, dan pindahkan ke Trash.
-   - **Optimize System (`mo optimize`)**: Pratinjau dan eksekusi perbaikan preferensi rusak, Spotlight, CoreDuet, dan layanan sistem.
-   - **Project Purge (`mo purge`)**: Pratinjau dan pembersihan artefak build (`node_modules`, `target`, `build`, `dist`, `.next`, `venv`, `Pods`).
-   - **Installers (`mo installer`)**: Temukan dan bersihkan file installer `.dmg`, `.pkg`, `.iso`, `.xip`, `.zip`.
-   - **Slim Universal Apps (`mo slim`)**: Pindai dan hapus arsitektur Intel (`x86_64`) dari Universal Apps di Apple Silicon.
-   - **Audit History (`mo history --json`)**: Riwayat sesi operasi dan daftar file yang dihapus/dipindahkan ke Trash.
-   - **CLI, TouchID & Whitelist**: Pengaturan tampilan indikator menu bar (Ringkas / 2 Baris / Ikon), Buka saat Login (`SMAppService`), konfigurasi Touch ID untuk `sudo` (`mo touchid`), shell completion (`mo completion`), serta editor langsung untuk `~/.config/mole/whitelist`, `whitelist_optimize`, dan `purge_paths`.
+1. **macOS Menu Bar Indicator** (seperti [LiteMonitor](https://github.com/kikiraihan/mac-os-lite-monitor) & [LiteCalendar](https://github.com/kikiraihan/our-life-planner-calendar-mac-os)) untuk memantau CPU, RAM, sisa SSD, kecepatan jaringan, baterai, dan Health Score secara real-time.
+   - **Klik kiri** ikon: popover berisi cincin Health Score (`mo status --json`), meter CPU/RAM/Disk/Jaringan/Baterai, dan 6 tombol akses cepat (Bersihkan, Uninstall, Analisis Disk, Optimasi, Purge, Kesehatan).
+   - **Klik kanan** ikon: menu lengkap (pilih metrik di menu bar, mode ringkas/2 baris, interval update, Buka saat Login, cek pembaruan, uninstall MoleApp).
+2. **Mac App Dashboard Lengkap** (SwiftUI, sidebar bergrup) yang membungkus seluruh fitur utama **Mole CLI (`mo`)** dengan pratinjau `--dry-run` dan integrasi Terminal untuk langkah yang butuh sudo atau pilihan interaktif:
+   - **Kesehatan (`mo status --json`)**: Cincin skor kesehatan, info hardware, panel CPU/memori/disk/baterai/suhu & daya/Trash, serta grafik Top Processes.
+   - **Bersihkan (`mo clean`)**: Pratinjau `--dry-run` dengan output streaming, daftar kandidat `~/.config/mole/clean-list.txt`, whitelist, pembersihan user-level, serta full clean (sudo) via Terminal.
+   - **Uninstall (`mo uninstall`)**: Daftar aplikasi (`--list`) dengan ikon asli macOS, pencarian nama/bundle ID, label Homebrew, pratinjau sisa file (`--dry-run`), dan uninstall via Terminal dengan konfirmasi Mole.
+   - **Analisis Disk (`mo analyze --json`)**: Batang proporsi ukuran per folder, penanda cache yang aman dibersihkan, klik dua kali untuk masuk folder, tombol kembali, daftar file terbesar, dan Tampilkan di Finder. Penghapusan sengaja lewat penjelajah interaktif di Terminal agar tercatat di riwayat Mole.
+   - **Optimasi (`mo optimize`)**: Pratinjau dan eksekusi perbaikan preferensi rusak, Spotlight, CoreDuet, dan layanan sistem.
+   - **Purge Proyek (`mo purge`)**: Pratinjau dan pembersihan artefak build (`node_modules`, `target`, `build`, `dist`, `.next`, `venv`, `Pods`), plus pengaturan folder proyek.
+   - **Installer (`mo installer`)**: Temukan file installer `.dmg`, `.pkg`, `.iso`, `.xip`, `.zip`.
+   - **Slim Apps (`mo slim`)**: Pindai dan hapus arsitektur Intel (`x86_64`) dari Universal Apps di Apple Silicon.
+   - **Riwayat & Alat (`mo history --json`)**: Daftar sesi operasi dan file yang dihapus/dipindah ke Trash, serta pintasan Touch ID untuk `sudo` (`mo touchid`), shell completion (`mo completion`), whitelist clean/optimize, folder proyek purge, folder konfigurasi, dan log operasi.
+
+### Desain
+Tema "liang tikus tanah": aksen merah muda hidung mole `#D9668A`, hijau lumut `#6E9F6B` untuk kondisi sehat, amber `#E0A43A` untuk waspada, merah bara `#D9534F` untuk kritis. Angka dan judul memakai SF Rounded; latar mengikuti mode terang/gelap macOS.
 
 ## Instalasi
 
@@ -44,7 +48,10 @@ open /Applications/MoleApp.app --args --dashboard
 
 ```text
 macos-app/
-├── Sources/MoleApp/main.swift   # Kode sumber Swift (Menu Bar Indicator + SwiftUI Dashboard)
+├── Sources/MoleApp/
+│   ├── main.swift               # Indikator menu bar, sampler metrik, bridge Mole CLI, updater
+│   ├── Dashboard.swift          # Jendela dashboard SwiftUI untuk semua fitur
+│   └── Popover.swift            # Popover klik kiri di menu bar
 ├── Resources/Info.plist         # Metadata bundle macOS (id.local.moleapp)
 └── scripts/
     ├── build.sh                 # Build Go binaries + bundle Mole CLI + compile Swift .app

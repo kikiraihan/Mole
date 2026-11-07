@@ -12,6 +12,11 @@ REPO_ROOT="$(cd "$MACOS_APP_DIR/.." && pwd)"
 
 APP_DIR="$MACOS_APP_DIR/build/MoleApp.app"
 SRC_FILE="$MACOS_APP_DIR/Sources/MoleApp/main.swift"
+# Semua file Swift dikompilasi bersama; main.swift tetap menjadi entry point
+SRC_FILES=("$SRC_FILE")
+for f in "$MACOS_APP_DIR"/Sources/MoleApp/*.swift; do
+    [[ "$f" == "$SRC_FILE" ]] || SRC_FILES+=("$f")
+done
 PLIST_FILE="$MACOS_APP_DIR/Resources/Info.plist"
 CLI_DEST="$APP_DIR/Contents/Resources/mole-cli"
 
@@ -52,13 +57,13 @@ cd "$MACOS_APP_DIR"
 SDK_PATH="$(xcrun --show-sdk-path)"
 SWIFTC_BIN="$(xcrun --find swiftc)"
 if [[ "${ARCH:-}" == "universal" ]]; then
-    "$SWIFTC_BIN" -O -swift-version 5 -sdk "$SDK_PATH" -target arm64-apple-macos13.0 "$SRC_FILE" -o build/MoleApp-arm64
-    "$SWIFTC_BIN" -O -swift-version 5 -sdk "$SDK_PATH" -target x86_64-apple-macos13.0 "$SRC_FILE" -o build/MoleApp-x86_64
+    "$SWIFTC_BIN" -O -swift-version 5 -sdk "$SDK_PATH" -target arm64-apple-macos13.0 "${SRC_FILES[@]}" -o build/MoleApp-arm64
+    "$SWIFTC_BIN" -O -swift-version 5 -sdk "$SDK_PATH" -target x86_64-apple-macos13.0 "${SRC_FILES[@]}" -o build/MoleApp-x86_64
     lipo -create build/MoleApp-arm64 build/MoleApp-x86_64 -output "$APP_DIR/Contents/MacOS/MoleApp"
     rm -f build/MoleApp-arm64 build/MoleApp-x86_64 # SAFE: removes temporary architecture slices inside build/
 else
     HOST_ARCH="$(uname -m)"
-    "$SWIFTC_BIN" -O -swift-version 5 -sdk "$SDK_PATH" -target "${HOST_ARCH}-apple-macos13.0" "$SRC_FILE" -o "$APP_DIR/Contents/MacOS/MoleApp"
+    "$SWIFTC_BIN" -O -swift-version 5 -sdk "$SDK_PATH" -target "${HOST_ARCH}-apple-macos13.0" "${SRC_FILES[@]}" -o "$APP_DIR/Contents/MacOS/MoleApp"
 fi
 
 cp "$PLIST_FILE" "$APP_DIR/Contents/Info.plist"

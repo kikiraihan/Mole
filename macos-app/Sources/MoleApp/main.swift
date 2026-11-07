@@ -1,10 +1,12 @@
 // MoleApp — Menu Bar Indicator + Mac App Dashboard untuk seluruh fitur Mole CLI
 // Dibuat dengan Swift + AppKit murni (tanpa dependensi eksternal, kompilasi instan < 3 detik).
+// Dashboard & popover memakai SwiftUI (Dashboard.swift, Popover.swift); file ini tetap memegang indikator & bridge CLI.
 // Build: ./macos-app/scripts/build.sh
 
 import Cocoa
 import IOKit.ps
 import ServiceManagement
+import SwiftUI
 
 // MARK: - 1. Native Real-Time Metrics Sampler (Menu Bar Indicator ala LiteMonitor)
 
@@ -153,7 +155,7 @@ func formatNetRate(_ bytesPerSec: Double, short: Bool = false) -> String {
 }
 
 func stripANSI(_ input: String) -> String {
-    guard let regex = try? NSRegularExpression(pattern: "\\x1B\\[[0-9;]*[A-Za-z]|\\r", options: []) else {
+    guard let regex = try? NSRegularExpression(pattern: "\\x1B\\[[0-9;?]*[A-Za-z]|\\x1B\\][^\\x07]*\\x07|\\r", options: []) else {
         return input
     }
     let range = NSRange(input.startIndex..<input.endIndex, in: input)
@@ -184,19 +186,118 @@ final class MoleBridge {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
 
+    /// Versi Mole CLI yang dibundle (dibaca dari baris VERSION= di skrip `mole`).
+    var cliVersion: String {
+        guard let text = try? String(contentsOfFile: moleExecutablePath, encoding: .utf8) else { return "?" }
+        for line in text.split(separator: "\n").prefix(200) where line.hasPrefix("VERSION=") {
+            return line.dropFirst("VERSION=".count).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        }
+        return "?"
+    }
+
+    /// Process dasar: tanpa warna, PATH standar, stdin /dev/null agar CLI selalu masuk mode non-interaktif.
+    private func makeProcess(_ execPath: String, _ args: [String]) -> Process {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/bash")
+        proc.arguments = [execPath] + args
+
+        var env = ProcessInfo.processInfo.environment
+        env["NO_COLOR"] = "1"
+        env["TERM"] = "dumb"
+        let stdPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        env["PATH"] = stdPath + ":" + (env["PATH"] ?? "")
+        proc.environment = env
+        proc.standardInput = FileHandle.nullDevice
+        return proc
+    }
+
+    /// Membaca stderr di thread terpisah supaya pipe tidak penuh dan proses tidak macet.
+    private func drainConcurrently(_ handle: FileHandle) -> () -> Data {
+        final class Box { var data = Data() }
+        let box = Box()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            box.data = handle.readDataToEndOfFile()
+            group.leave()
+        }
+        return {
+            group.wait()
+            return box.data
+        }
+    }
+
+    /// Menjalankan perintah ber-output JSON: hanya stdout yang di-parse, stderr dikembalikan sebagai pesan.
+    func runJSON(_ args: [String], completion: @escaping (Any?, String) -> Void) {
+        let execPath = moleExecutablePath
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = self.makeProcess(execPath, args)
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            proc.standardOutput = outPipe
+            proc.standardError = errPipe
+            do {
+                try proc.run()
+            } catch {
+                DispatchQueue.main.async {
+                    completion(nil, "Gagal menjalankan Mole CLI: \(error.localizedDescription)")
+                }
+                return
+            }
+            let errData = self.drainConcurrently(errPipe.fileHandleForReading)
+            let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+            let errText = stripANSI(String(decoding: errData(), as: UTF8.self))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            proc.waitUntilExit()
+            let json = try? JSONSerialization.jsonObject(with: outData, options: [.fragmentsAllowed])
+            DispatchQueue.main.async {
+                completion(json, errText)
+            }
+        }
+    }
+
+    /// Menjalankan perintah dan mengalirkan output (stdout + stderr) per potongan ke UI.
+    @discardableResult
+    func stream(_ args: [String], onOutput: @escaping (String) -> Void, completion: @escaping (Int32) -> Void) -> Process? {
+        let proc = makeProcess(moleExecutablePath, args)
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+        let reader = pipe.fileHandleForReading
+        // Satu antrean serial menjaga urutan potongan output dan sinyal selesai.
+        let queue = DispatchQueue(label: "id.local.moleapp.stream")
+        reader.readabilityHandler = { h in
+            let d = h.availableData
+            guard !d.isEmpty else { return }
+            let text = stripANSI(String(decoding: d, as: UTF8.self))
+            queue.async { DispatchQueue.main.async { onOutput(text) } }
+        }
+        proc.terminationHandler = { p in
+            queue.async {
+                reader.readabilityHandler = nil
+                let rest = reader.readDataToEndOfFile()
+                let tail = rest.isEmpty ? "" : stripANSI(String(decoding: rest, as: UTF8.self))
+                DispatchQueue.main.async {
+                    if !tail.isEmpty { onOutput(tail) }
+                    completion(p.terminationStatus)
+                }
+            }
+        }
+        do {
+            try proc.run()
+        } catch {
+            reader.readabilityHandler = nil
+            onOutput("Gagal menjalankan Mole CLI: \(error.localizedDescription)")
+            completion(-1)
+            return nil
+        }
+        return proc
+    }
+
     func runCommand(_ args: [String], completion: @escaping (Int32, String) -> Void) {
         let execPath = moleExecutablePath
         DispatchQueue.global(qos: .userInitiated).async {
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: "/bin/bash")
-            proc.arguments = [execPath] + args
-
-            var env = ProcessInfo.processInfo.environment
-            env["NO_COLOR"] = "1"
-            env["TERM"] = "dumb"
-            let stdPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-            env["PATH"] = stdPath + ":" + (env["PATH"] ?? "")
-            proc.environment = env
+            let proc = self.makeProcess(execPath, args)
 
             let outPipe = Pipe()
             let errPipe = Pipe()
@@ -212,8 +313,9 @@ final class MoleBridge {
                 return
             }
 
+            let errReader = self.drainConcurrently(errPipe.fileHandleForReading)
             let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            let errData = errReader()
             proc.waitUntilExit()
 
             let outStr = String(data: outData, encoding: .utf8) ?? ""
@@ -307,6 +409,12 @@ final class Updater: NSObject {
                 a.runModal()
                 return
             }
+            if l.version == "app-v\(Updater.current)" {
+                a.messageText = "MoleApp sudah versi terbaru"
+                a.informativeText = "Versi terpasang: v\(Updater.current)"
+                a.runModal()
+                return
+            }
             a.messageText = "Rilis terbaru di GitHub: \(l.version)"
             a.informativeText = "Versi terpasang: v\(Updater.current)\nKlik 'Buka Halaman Rilis' untuk mengunduh MoleApp.zip terbaru."
             a.addButton(withTitle: "Buka Halaman Rilis")
@@ -318,34 +426,31 @@ final class Updater: NSObject {
     }
 }
 
-// MARK: - 5. Mac App Dashboard Window Controller (Pure AppKit Split/Tab Interface)
+// MARK: - 5. Mac App Dashboard Window Controller (SwiftUI, lihat Dashboard.swift)
+// Antarmuka lama berbasis tab segmented + konsol teks diganti dengan dashboard SwiftUI bersidebar.
+// API publik (window, show(tab:), updateLiveBanner) dipertahankan agar AppDelegate tetap sama.
 
 final class DashboardWindowController: NSObject, NSWindowDelegate {
     let window: NSWindow
-    private let sidebarSegment = NSSegmentedControl()
-    private let statusHeaderLabel = NSTextField(labelWithString: "")
-    private let subtitleLabel = NSTextField(labelWithString: "")
-    private let actionStack = NSStackView()
-    private let pathField = NSTextField()
-    private let outputTextView = NSTextView()
-    private let spinner = NSProgressIndicator()
-
-    private var currentTab: Int = 0
+    let model = DashboardModel()
 
     override init() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
+            contentRect: NSRect(x: 0, y: 0, width: 1100, height: 720),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
         super.init()
-        window.title = "MoleApp v\(MoleBridge.shared.version) — macOS Cleaner, Uninstaller, Analyzer & System Monitor"
+        window.title = "MoleApp"
+        window.subtitle = "v\(MoleBridge.shared.version), Mole CLI v\(MoleBridge.shared.cliVersion)"
+        window.contentViewController = NSHostingController(rootView: DashboardRoot(model: model))
+        window.setContentSize(NSSize(width: 1100, height: 720))
+        window.minSize = NSSize(width: 880, height: 580)
+        window.setFrameAutosaveName("MoleAppDashboard")
         window.center()
         window.isReleasedWhenClosed = false
         window.delegate = self
-        setupUI()
-        selectTab(0)
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -353,353 +458,17 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
     }
 
     func show(tab: Int? = nil) {
-        if let tab {
-            sidebarSegment.selectedSegment = tab
-            selectTab(tab)
+        if let tab, let feature = Feature(rawValue: tab) {
+            model.selection = feature
         }
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func setupUI() {
-        guard let content = window.contentView else { return }
-
-        // Top Live Metrics Banner
-        statusHeaderLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)
-        statusHeaderLabel.textColor = .labelColor
-        statusHeaderLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        // Feature Tabs (All 9 Mole CLI features)
-        let titles = [
-            "1. Status",
-            "2. Clean",
-            "3. Uninstall",
-            "4. Analyze",
-            "5. Optimize",
-            "6. Purge",
-            "7. Installer",
-            "8. Slim",
-            "9. History & Tools"
-        ]
-        sidebarSegment.segmentCount = titles.count
-        for (i, t) in titles.enumerated() {
-            sidebarSegment.setLabel(t, forSegment: i)
-        }
-        sidebarSegment.segmentStyle = .rounded
-        sidebarSegment.target = self
-        sidebarSegment.action = #selector(tabChanged(_:))
-        sidebarSegment.selectedSegment = 0
-        sidebarSegment.translatesAutoresizingMaskIntoConstraints = false
-
-        // Subtitle description
-        subtitleLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        subtitleLabel.textColor = .secondaryLabelColor
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-
-        // Action Buttons Toolbar
-        actionStack.orientation = .horizontal
-        actionStack.spacing = 8
-        actionStack.alignment = .centerY
-        actionStack.translatesAutoresizingMaskIntoConstraints = false
-
-        // Optional Path / Filter Input
-        pathField.placeholderString = "Path direktori atau nama aplikasi (opsional)..."
-        pathField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        pathField.stringValue = NSHomeDirectory()
-        pathField.translatesAutoresizingMaskIntoConstraints = false
-
-        // Progress Spinner
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isDisplayedWhenStopped = false
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-
-        // Scrollable Monospace Output Console
-        let scroll = NSScrollView()
-        scroll.hasVerticalScroller = true
-        scroll.hasHorizontalScroller = true
-        scroll.borderType = .bezelBorder
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-
-        outputTextView.isEditable = false
-        outputTextView.isSelectable = true
-        outputTextView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
-        outputTextView.textContainerInset = NSSize(width: 10, height: 10)
-        outputTextView.autoresizingMask = [.width, .height]
-        scroll.documentView = outputTextView
-
-        content.addSubview(statusHeaderLabel)
-        content.addSubview(sidebarSegment)
-        content.addSubview(subtitleLabel)
-        content.addSubview(actionStack)
-        content.addSubview(pathField)
-        content.addSubview(spinner)
-        content.addSubview(scroll)
-
-        NSLayoutConstraint.activate([
-            statusHeaderLabel.topAnchor.constraint(equalTo: content.topAnchor, constant: 14),
-            statusHeaderLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-            statusHeaderLabel.trailingAnchor.constraint(equalTo: spinner.leadingAnchor, constant: -10),
-
-            spinner.centerYAnchor.constraint(equalTo: statusHeaderLabel.centerYAnchor),
-            spinner.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-
-            sidebarSegment.topAnchor.constraint(equalTo: statusHeaderLabel.bottomAnchor, constant: 10),
-            sidebarSegment.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-            sidebarSegment.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-
-            subtitleLabel.topAnchor.constraint(equalTo: sidebarSegment.bottomAnchor, constant: 10),
-            subtitleLabel.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-            subtitleLabel.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-
-            actionStack.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 8),
-            actionStack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-
-            pathField.topAnchor.constraint(equalTo: actionStack.bottomAnchor, constant: 8),
-            pathField.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-            pathField.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-
-            scroll.topAnchor.constraint(equalTo: pathField.bottomAnchor, constant: 10),
-            scroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 18),
-            scroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -18),
-            scroll.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -18)
-        ])
-    }
-
     func updateLiveBanner(cpu: Double, memUsed: UInt64, memTotal: UInt64, disk: DiskSnapshot, netUp: Double, netDown: Double, bat: BatterySnapshot?) {
-        let memPct = memTotal > 0 ? (Double(memUsed) / Double(memTotal) * 100.0) : 0
-        var text = String(
-            format: "⚡ CPU: %.1f%%   │   🧠 RAM: %@ / %@ (%.0f%%)   │   💾 %@: %@ bebas (%.0f%%)   │   🌐 ↓ %@  ↑ %@",
-            cpu,
-            formatBytes(Int64(memUsed)),
-            formatBytes(Int64(memTotal)),
-            memPct,
-            disk.name,
-            formatBytes(disk.free),
-            disk.percent,
-            formatNetRate(netDown),
-            formatNetRate(netUp)
-        )
-        if let b = bat {
-            text += "   │   🔋 \(b.percent)%"
-        }
-        statusHeaderLabel.stringValue = text
+        LiveMetrics.shared.update(cpu: cpu, memUsed: memUsed, memTotal: memTotal, disk: disk, netUp: netUp, netDown: netDown, bat: bat)
     }
-
-    @objc private func tabChanged(_ sender: NSSegmentedControl) {
-        selectTab(sender.selectedSegment)
-    }
-
-    private func makeButton(_ title: String, action: Selector, prominent: Bool = false) -> NSButton {
-        let btn = NSButton(title: title, target: self, action: action)
-        btn.bezelStyle = .rounded
-        if prominent {
-            btn.keyEquivalent = "\r"
-        }
-        return btn
-    }
-
-    func selectTab(_ index: Int) {
-        currentTab = index
-        for v in actionStack.arrangedSubviews {
-            actionStack.removeArrangedSubview(v)
-            v.removeFromSuperview()
-        }
-
-        switch index {
-        case 0: // Status
-            subtitleLabel.stringValue = "Status & Monitor (`mo status --json`): Skor kesehatan Mac, proses tertinggi, sensor suhu, daya & baterai."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("Refresh Snapshot (`mo status --json`)", action: #selector(runStatusJSON), prominent: true))
-            actionStack.addArrangedSubview(makeButton("Buka Live TUI (`mo status` di Terminal)", action: #selector(openStatusTUI)))
-            actionStack.addArrangedSubview(makeButton("Buka Activity Monitor", action: #selector(openActivityMonitor)))
-            runStatusJSON()
-
-        case 1: // Clean
-            subtitleLabel.stringValue = "Deep Clean (`mo clean`): Pratinjau (`--dry-run`) dan bersihkan cache aplikasi, browser, developer tools & sistem."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("1. Preview (`mo clean --dry-run`)", action: #selector(runCleanDryRun), prominent: true))
-            actionStack.addArrangedSubview(makeButton("Lihat Daftar Kandidat (`clean-list.txt`)", action: #selector(showCleanCandidates)))
-            actionStack.addArrangedSubview(makeButton("2. Jalankan Clean User-Level (`mo clean`)", action: #selector(runCleanExecute)))
-            actionStack.addArrangedSubview(makeButton("Full Clean + Sudo di Terminal", action: #selector(openCleanTerminal)))
-            if outputTextView.string.isEmpty { runCleanDryRun() }
-
-        case 2: // Uninstall
-            subtitleLabel.stringValue = "Uninstall Apps (`mo uninstall`): Inventaris aplikasi terinstal (`--list`), preview sisa file (`--dry-run`), dan hapus ke Trash."
-            pathField.isHidden = false
-            pathField.placeholderString = "Ketik uninstall_name aplikasi untuk Preview (mis. Slack, CCleaner)..."
-            if pathField.stringValue == NSHomeDirectory() { pathField.stringValue = "" }
-            actionStack.addArrangedSubview(makeButton("Muat Daftar Aplikasi (`mo uninstall --list`)", action: #selector(runUninstallList), prominent: true))
-            actionStack.addArrangedSubview(makeButton("Preview Aplikasi (`mo uninstall --dry-run <nama>`)", action: #selector(runUninstallPreview)))
-            actionStack.addArrangedSubview(makeButton("Interactive Uninstaller di Terminal (`mo uninstall`)", action: #selector(openUninstallTerminal)))
-            runUninstallList()
-
-        case 3: // Analyze
-            subtitleLabel.stringValue = "Disk Analyzer (`mo analyze --json`): Pindai ukuran direktori & file terbesar, atau buka TUI penjelajah disk interaktif."
-            pathField.isHidden = false
-            pathField.placeholderString = "Path direktori yang ingin dianalisis (mis. /Users/nama)..."
-            if pathField.stringValue.isEmpty { pathField.stringValue = NSHomeDirectory() }
-            actionStack.addArrangedSubview(makeButton("Scan Path (`mo analyze --json <path>`)", action: #selector(runAnalyzePath), prominent: true))
-            actionStack.addArrangedSubview(makeButton("Scan Overview Mesin (`mo analyze --json`)", action: #selector(runAnalyzeOverview)))
-            actionStack.addArrangedSubview(makeButton("Buka Interactive Disk Explorer (`mo analyze` di Terminal)", action: #selector(openAnalyzeTerminal)))
-            runAnalyzePath()
-
-        case 4: // Optimize
-            subtitleLabel.stringValue = "Optimize System (`mo optimize`): Perbaiki preferensi rusak, bersihkan aturan Spotlight yatim, dan segarkan layanan macOS."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("1. Preview (`mo optimize --dry-run`)", action: #selector(runOptimizeDryRun), prominent: true))
-            actionStack.addArrangedSubview(makeButton("2. Jalankan Optimize User-Level (`mo optimize`)", action: #selector(runOptimizeExecute)))
-            actionStack.addArrangedSubview(makeButton("Optimize + Sudo di Terminal", action: #selector(openOptimizeTerminal)))
-            runOptimizeDryRun()
-
-        case 5: // Purge
-            subtitleLabel.stringValue = "Project Purge (`mo purge`): Bersihkan artefak build proyek (`node_modules`, `target`, `build`, `dist`, `.next`, `venv`, `Pods`)."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("1. Preview Kandidat (`mo purge --dry-run`)", action: #selector(runPurgeDryRun), prominent: true))
-            actionStack.addArrangedSubview(makeButton("2. Hapus Kandidat (`mo purge --yes`)", action: #selector(runPurgeYes)))
-            actionStack.addArrangedSubview(makeButton("Pilih Proyek di Terminal (`mo purge`)", action: #selector(openPurgeTerminal)))
-            actionStack.addArrangedSubview(makeButton("Atur Folder Proyek (`mo purge --paths`)", action: #selector(openPurgePathsTerminal)))
-            runPurgeDryRun()
-
-        case 6: // Installer
-            subtitleLabel.stringValue = "Installer Cleanup (`mo installer`): Temukan file installer `.dmg`, `.pkg`, `.iso`, `.xip`, `.zip` di Downloads, Desktop, Homebrew, dll."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("1. Pindai Installer (`mo installer --dry-run`)", action: #selector(runInstallerDryRun), prominent: true))
-            actionStack.addArrangedSubview(makeButton("2. Pilih & Hapus Installer di Terminal (`mo installer`)", action: #selector(openInstallerTerminal)))
-            runInstallerDryRun()
-
-        case 7: // Slim
-            subtitleLabel.stringValue = "Slim Universal Apps (`mo slim`): Hapus arsitektur Intel (`x86_64`) dari Universal Apps di Apple Silicon dengan verifikasi Gatekeeper."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("1. Pindai Universal Apps (`mo slim --dry-run`)", action: #selector(runSlimDryRun), prominent: true))
-            actionStack.addArrangedSubview(makeButton("2. Pilih Aplikasi di Terminal (`mo slim`)", action: #selector(openSlimTerminal)))
-            runSlimDryRun()
-
-        case 8: // History & Tools
-            subtitleLabel.stringValue = "Audit History (`mo history`) & Konfigurasi (`mo touchid`, `mo completion`, `--whitelist`)."
-            pathField.isHidden = true
-            actionStack.addArrangedSubview(makeButton("Riwayat Operasi (`mo history`)", action: #selector(runHistoryText), prominent: true))
-            actionStack.addArrangedSubview(makeButton("Riwayat JSON (`mo history --json`)", action: #selector(runHistoryJSON)))
-            actionStack.addArrangedSubview(makeButton("Touch ID Sudo (`mo touchid`)", action: #selector(openTouchIDTerminal)))
-            actionStack.addArrangedSubview(makeButton("Clean Whitelist (`mo clean --whitelist`)", action: #selector(openWhitelistTerminal)))
-            actionStack.addArrangedSubview(makeButton("Shell Completion (`mo completion`)", action: #selector(openCompletionTerminal)))
-            runHistoryText()
-
-        default:
-            break
-        }
-    }
-
-    private func executeCLI(_ args: [String], title: String) {
-        spinner.startAnimation(nil)
-        outputTextView.string = "▶ Menjalankan: mo \(args.joined(separator: " "))\n⏳ Mohon tunggu...\n"
-        MoleBridge.shared.runCommand(args) { [weak self] code, out in
-            guard let self else { return }
-            self.spinner.stopAnimation(nil)
-            let header = "=== \(title) (exit: \(code)) ===\n\n"
-            self.outputTextView.string = header + (out.isEmpty ? "(Tidak ada output)" : out)
-        }
-    }
-
-    // MARK: - Button Actions
-
-    @objc func runStatusJSON() { executeCLI(["status", "--json"], title: "mo status --json") }
-    @objc func openStatusTUI() { MoleBridge.shared.openInTerminal("status") }
-    @objc func openActivityMonitor() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app"))
-    }
-
-    @objc func runCleanDryRun() { executeCLI(["clean", "--dry-run"], title: "mo clean --dry-run") }
-    @objc func showCleanCandidates() {
-        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".config/mole/clean-list.txt")
-        if let text = try? String(contentsOfFile: path, encoding: .utf8) {
-            outputTextView.string = "=== Daftar Kandidat Clean (~/.config/mole/clean-list.txt) ===\n\n" + text
-        } else {
-            outputTextView.string = "File ~/.config/mole/clean-list.txt belum tersedia. Jalankan '1. Preview (mo clean --dry-run)' terlebih dahulu."
-        }
-    }
-    @objc func runCleanExecute() {
-        let a = NSAlert()
-        a.messageText = "Jalankan Pembersihan (`mo clean`)?"
-        a.informativeText = "Mole akan menghapus cache user-level sesuai daftar pratinjau."
-        a.addButton(withTitle: "Bersihkan Sekarang")
-        a.addButton(withTitle: "Batal")
-        a.alertStyle = .warning
-        if a.runModal() == .alertFirstButtonReturn {
-            executeCLI(["clean"], title: "mo clean")
-        }
-    }
-    @objc func openCleanTerminal() { MoleBridge.shared.openInTerminal("clean") }
-
-    @objc func runUninstallList() { executeCLI(["uninstall", "--list"], title: "mo uninstall --list") }
-    @objc func runUninstallPreview() {
-        let target = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !target.isEmpty else {
-            outputTextView.string = "Masukkan nama aplikasi di kolom input di atas terlebih dahulu (lihat nilai `uninstall_name` dari `mo uninstall --list`), lalu klik Preview."
-            return
-        }
-        executeCLI(["uninstall", "--dry-run", target], title: "mo uninstall --dry-run \(target)")
-    }
-    @objc func openUninstallTerminal() {
-        let target = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if target.isEmpty {
-            MoleBridge.shared.openInTerminal("uninstall")
-        } else {
-            let safe = target.replacingOccurrences(of: "'", with: "'\\''")
-            MoleBridge.shared.openInTerminal("uninstall '\(safe)'")
-        }
-    }
-
-    @objc func runAnalyzePath() {
-        let target = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if target.isEmpty {
-            executeCLI(["analyze", "--json"], title: "mo analyze --json")
-        } else {
-            executeCLI(["analyze", "--json", target], title: "mo analyze --json \(target)")
-        }
-    }
-    @objc func runAnalyzeOverview() { executeCLI(["analyze", "--json"], title: "mo analyze --json (Overview)") }
-    @objc func openAnalyzeTerminal() {
-        let target = pathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        if target.isEmpty {
-            MoleBridge.shared.openInTerminal("analyze")
-        } else {
-            let safe = target.replacingOccurrences(of: "'", with: "'\\''")
-            MoleBridge.shared.openInTerminal("analyze '\(safe)'")
-        }
-    }
-
-    @objc func runOptimizeDryRun() { executeCLI(["optimize", "--dry-run"], title: "mo optimize --dry-run") }
-    @objc func runOptimizeExecute() { executeCLI(["optimize"], title: "mo optimize") }
-    @objc func openOptimizeTerminal() { MoleBridge.shared.openInTerminal("optimize") }
-
-    @objc func runPurgeDryRun() { executeCLI(["purge", "--dry-run"], title: "mo purge --dry-run") }
-    @objc func runPurgeYes() {
-        let a = NSAlert()
-        a.messageText = "Hapus Semua Kandidat Purge (`mo purge --yes`)?"
-        a.informativeText = "Mole akan menghapus artefak build proyek yang tidak aktif (>7 hari) sesuai daftar pratinjau."
-        a.addButton(withTitle: "Hapus Kandidat")
-        a.addButton(withTitle: "Batal")
-        a.alertStyle = .warning
-        if a.runModal() == .alertFirstButtonReturn {
-            executeCLI(["purge", "--yes"], title: "mo purge --yes")
-        }
-    }
-    @objc func openPurgeTerminal() { MoleBridge.shared.openInTerminal("purge") }
-    @objc func openPurgePathsTerminal() { MoleBridge.shared.openInTerminal("purge --paths") }
-
-    @objc func runInstallerDryRun() { executeCLI(["installer", "--dry-run"], title: "mo installer --dry-run") }
-    @objc func openInstallerTerminal() { MoleBridge.shared.openInTerminal("installer") }
-
-    @objc func runSlimDryRun() { executeCLI(["slim", "--dry-run"], title: "mo slim --dry-run") }
-    @objc func openSlimTerminal() { MoleBridge.shared.openInTerminal("slim") }
-
-    @objc func runHistoryText() { executeCLI(["history", "--limit", "50"], title: "mo history --limit 50") }
-    @objc func runHistoryJSON() { executeCLI(["history", "--json", "--limit", "50"], title: "mo history --json --limit 50") }
-    @objc func openTouchIDTerminal() { MoleBridge.shared.openInTerminal("touchid") }
-    @objc func openWhitelistTerminal() { MoleBridge.shared.openInTerminal("clean --whitelist") }
-    @objc func openCompletionTerminal() { MoleBridge.shared.openInTerminal("completion") }
 }
 
 // MARK: - 6. Menu Bar Indicator AppDelegate (Ala LiteMonitor + Mole Quick Actions)
@@ -710,6 +479,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let defaults = UserDefaults.standard
     let updater = Updater()
     lazy var dashboard = DashboardWindowController()
+
+    // Popover ringkas untuk klik kiri (klik kanan tetap membuka menu lengkap)
+    lazy var popover: NSPopover = {
+        let p = NSPopover()
+        p.behavior = .transient
+        p.animates = true
+        let actions = PopoverActions(
+            openTab: { [weak self] tab in
+                guard let self else { return }
+                self.popover.performClose(nil)
+                if let tab {
+                    self.dashboard.show(tab: tab)
+                } else {
+                    self.dashboard.show(tab: nil)
+                }
+            },
+            openTerminal: { [weak self] in
+                self?.popover.performClose(nil)
+                MoleBridge.shared.openInTerminal("")
+            },
+            openMenu: { [weak self] in
+                self?.popover.performClose(nil)
+                self?.showMenu()
+            },
+            quit: { NSApp.terminate(nil) }
+        )
+        p.contentViewController = NSHostingController(rootView: PopoverView(actions: actions))
+        return p
+    }()
 
     private let cpuSampler = CPUSampler()
     private let netSampler = NetSampler()
@@ -744,7 +542,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "interval": 2.0
         ])
 
-        statusItem.menu = menu
+        // Klik kiri: popover ringkas; klik kanan (atau Control-klik): menu lengkap
+        if let btn = statusItem.button {
+            btn.target = self
+            btn.action = #selector(statusItemClicked(_:))
+            btn.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        }
         menu.delegate = self
         buildMenu()
 
@@ -753,8 +556,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         tick()
         startTimer()
 
+        LiveMetrics.shared.refreshHealth(force: true)
+
         if CommandLine.arguments.contains("--dashboard") {
             dashboard.show(tab: 0)
+        }
+        // --popover: buka popover saat start (dipakai smoke test CI untuk tangkapan layar)
+        if CommandLine.arguments.contains("--popover") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.togglePopover()
+            }
+        }
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            showMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    private func togglePopover() {
+        guard let btn = statusItem.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        tick()
+        LiveMetrics.shared.refreshHealth()
+        popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    fileprivate func showMenu() {
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+    }
+
+    func menuDidClose(_ menu: NSMenu) {
+        // Lepas menu lagi agar klik kiri berikutnya kembali membuka popover
+        if menu === self.menu {
+            statusItem.menu = nil
         }
     }
 
@@ -777,6 +622,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         bat = sampleBattery()
         updateBar()
         updateRows()
+        LiveMetrics.shared.update(cpu: cpuPct, memUsed: mem.used, memTotal: mem.total, disk: disk, netUp: rate.up, netDown: rate.down, bat: bat)
         if dashboard.window.isVisible {
             dashboard.updateLiveBanner(
                 cpu: cpuPct,
