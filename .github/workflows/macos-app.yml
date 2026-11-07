@@ -4,7 +4,8 @@ name: Build MoleApp (macOS Indicator & App)
 # Rilis otomatis mengikuti pola mac-os-lite-monitor: naikkan CFBundleShortVersionString di macos-app/Resources/Info.plist, lalu push ke main.
 on:
   push:
-    branches: [main]
+    # claude/** ikut dibangun agar branch fitur terverifikasi di mesin macOS; rilis tetap hanya dari main/tag
+    branches: [main, "claude/**"]
     tags: ["app-v*"]
     paths:
       - "macos-app/**"
