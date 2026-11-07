@@ -50,6 +50,29 @@ jobs:
           codesign -d -r- macos-app/build/MoleApp.app 2>&1 | tee /dev/stderr \
             | grep -q 'designated => identifier "id.local.moleapp"$'
 
+      - name: Smoke test (jalankan app & tangkap layar dashboard)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        continue-on-error: true
+        run: |
+          mkdir -p macos-app/dist/screens
+          macos-app/build/MoleApp.app/Contents/MacOS/MoleApp --dashboard --popover &
+          APP_PID=$!
+          sleep 25
+          if ! kill -0 "$APP_PID" 2>/dev/null; then
+            echo "::error::MoleApp berhenti sebelum smoke test selesai"
+            exit 1
+          fi
+          screencapture -x macos-app/dist/screens/dashboard.png || true
+          kill "$APP_PID" || true
+
+      - uses: actions/upload-artifact@v4
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        continue-on-error: true
+        with:
+          name: MoleApp-screens
+          path: macos-app/dist/screens/
+          if-no-files-found: ignore
+
       - name: Buat installer & paket ZIP rilis
         run: |
           ./macos-app/scripts/make-installer.sh
@@ -70,6 +93,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: MoleApp ${{ github.ref_name }}
+          body: |
+            ## Pasang MoleApp
+            1. Unduh **MoleApp.zip**, ekstrak, lalu pindahkan **MoleApp.app** ke `/Applications`.
+            2. Aplikasi ditandatangani ad-hoc (belum dinotarisasi Apple), jadi hapus karantina sekali:
+               ```bash
+               xattr -cr /Applications/MoleApp.app && open /Applications/MoleApp.app
+               ```
+            Atau unduh **install-MoleApp.zip**, ekstrak, lalu jalankan `bash install-MoleApp.command`.
+
+            Klik kiri ikon di menu bar untuk ringkasan kesehatan & akses cepat, klik kanan untuk pengaturan indikator.
+            Mole CLI beserta binary Go sudah dibundle di dalam aplikasi.
           generate_release_notes: true
           files: |
             macos-app/dist/MoleApp.zip
@@ -82,6 +116,17 @@ jobs:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: MoleApp v${{ steps.ver.outputs.version }}
           target_commitish: ${{ github.sha }}
+          body: |
+            ## Pasang MoleApp
+            1. Unduh **MoleApp.zip**, ekstrak, lalu pindahkan **MoleApp.app** ke `/Applications`.
+            2. Aplikasi ditandatangani ad-hoc (belum dinotarisasi Apple), jadi hapus karantina sekali:
+               ```bash
+               xattr -cr /Applications/MoleApp.app && open /Applications/MoleApp.app
+               ```
+            Atau unduh **install-MoleApp.zip**, ekstrak, lalu jalankan `bash install-MoleApp.command`.
+
+            Klik kiri ikon di menu bar untuk ringkasan kesehatan & akses cepat, klik kanan untuk pengaturan indikator.
+            Mole CLI beserta binary Go sudah dibundle di dalam aplikasi.
           generate_release_notes: true
           files: |
             macos-app/dist/MoleApp.zip

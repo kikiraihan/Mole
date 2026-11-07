@@ -561,6 +561,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--dashboard") {
             dashboard.show(tab: 0)
         }
+        // --popover: buka popover saat start (dipakai smoke test CI untuk tangkapan layar)
+        if CommandLine.arguments.contains("--popover") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+                self?.togglePopover()
+            }
+        }
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
