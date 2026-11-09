@@ -84,6 +84,130 @@ func revealInFinder(_ path: String) {
     NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
 }
 
+/// Mengubah teks ukuran dari mo uninstall --list ("769.4MB", "4KB", "1.2 GB") menjadi byte untuk pengurutan.
+func parseSizeText(_ text: String) -> Int64 {
+    let s = text.uppercased().replacingOccurrences(of: " ", with: "")
+    let units: [(String, Double)] = [("TB", 1_099_511_627_776), ("GB", 1_073_741_824), ("MB", 1_048_576), ("KB", 1024), ("B", 1)]
+    for (suffix, mult) in units where s.hasSuffix(suffix) {
+        if let v = Double(s.dropLast(suffix.count)) { return Int64(v * mult) }
+    }
+    return Int64(Double(s) ?? 0)
+}
+
+// MARK: - Tong Sampah
+// ~/.Trash dilindungi TCC: tanpa Full Disk Access, status-go membaca 0 B walau Trash berisi.
+// Urutan: baca langsung (jika MoleApp punya Full Disk Access), lalu tanya Finder lewat AppleScript.
+
+struct TrashInfo {
+    enum Source { case direct, finder, unavailable }
+    var bytes: Int64 = 0
+    var items = 0
+    var source: Source = .unavailable
+}
+
+enum TrashProbe {
+    static func measure(completion: @escaping (TrashInfo) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let info = direct() ?? finder() ?? TrashInfo()
+            DispatchQueue.main.async { completion(info) }
+        }
+    }
+
+    private static func direct() -> TrashInfo? {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Trash")
+        guard let top = try? fm.contentsOfDirectory(atPath: root.path) else { return nil }
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileSizeKey, .isRegularFileKey]
+        var total: Int64 = 0
+        let deadline = Date().addingTimeInterval(4)
+        if let e = fm.enumerator(at: root, includingPropertiesForKeys: keys, options: [], errorHandler: { _, _ in true }) {
+            for case let url as URL in e {
+                if Date() > deadline { break }
+                guard let v = try? url.resourceValues(forKeys: Set(keys)), v.isRegularFile == true else { continue }
+                total += Int64(v.totalFileAllocatedSize ?? v.fileSize ?? 0)
+            }
+        }
+        return TrashInfo(bytes: total, items: top.filter { $0 != ".DS_Store" }.count, source: .direct)
+    }
+
+    /// Finder menghitung Trash semua volume. Pertama kali macOS meminta izin Automation untuk Finder.
+    private static func finder() -> TrashInfo? {
+        let script = """
+        tell application "Finder"
+            set n to count of items of trash
+            set t to 0
+            repeat with i in (items of trash)
+                try
+                    set s to physical size of i
+                    if s is not missing value then set t to t + s
+                end try
+            end repeat
+            return (n as text) & "|" & (t as text)
+        end tell
+        """
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", script]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = FileHandle.nullDevice
+        guard (try? proc.run()) != nil else { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else { return nil }
+        let parts = String(decoding: data, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "|")
+        guard parts.count == 2, let n = Int(parts[0]) else { return nil }
+        // AppleScript bisa menulis angka besar sebagai 1.2345E+9
+        let bytes = Double(parts[1].replacingOccurrences(of: ",", with: ".")) ?? 0
+        return TrashInfo(bytes: Int64(bytes), items: n, source: .finder)
+    }
+
+    static func openFullDiskAccessSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+}
+
+// MARK: - Proses dengan RAM terbanyak
+// top_processes dari mo status diurutkan menurut CPU, jadi daftar RAM dibaca langsung dari ps (-m = urut memori).
+
+struct MemProcess: Identifiable {
+    let id: Int
+    let name: String
+    let rssBytes: Int64
+    let percent: Double
+}
+
+enum MemProcessSampler {
+    static func top(_ limit: Int = 8, completion: @escaping ([MemProcess]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+            proc.arguments = ["-Acmo", "pid=,rss=,pmem=,comm="]
+            let out = Pipe()
+            proc.standardOutput = out
+            proc.standardError = FileHandle.nullDevice
+            var result: [MemProcess] = []
+            if (try? proc.run()) != nil {
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+                    let f = line.split(separator: " ", maxSplits: 3, omittingEmptySubsequences: true)
+                    guard f.count == 4, let pid = Int(f[0]), let rss = Int64(f[1]) else { continue }
+                    result.append(MemProcess(id: pid, name: String(f[3]), rssBytes: rss * 1024, percent: Double(f[2]) ?? 0))
+                }
+                // ps -m sudah mengurutkan, tetapi urutkan ulang agar tidak bergantung pada versi ps
+                result.sort { $0.rssBytes > $1.rssBytes }
+            }
+            let top = Array(result.prefix(limit))
+            DispatchQueue.main.async { completion(top) }
+        }
+    }
+}
+
 // MARK: - Live Metrics (dibagi antara indikator menu bar, popover, dan dashboard)
 
 final class LiveMetrics: ObservableObject {
@@ -259,6 +383,8 @@ struct AppEntry: Identifiable, Hashable {
     let uninstallName: String
     let path: String
     let size: String
+    /// Ukuran dalam byte, diturunkan dari teks size untuk pengurutan.
+    var sizeBytes: Int64 { parseSizeText(size) }
 }
 
 final class UninstallStore: ObservableObject {
@@ -651,10 +777,14 @@ struct StatusView: View {
     @State private var data: [String: Any]?
     @State private var loading = false
     @State private var error = ""
+    @State private var trash: TrashInfo?
+    @State private var memProcs: [MemProcess] = []
 
     private func load() {
         loading = true
         error = ""
+        TrashProbe.measure { trash = $0 }
+        MemProcessSampler.top { memProcs = $0 }
         MoleBridge.shared.runJSON(["status", "--json"]) { json, err in
             loading = false
             if let d = json as? [String: Any] {
@@ -685,6 +815,7 @@ struct StatusView: View {
                     hero(d)
                     panels(d)
                     processes(d)
+                    memoryProcesses
                 } else if loading {
                     ProgressView("Membaca kondisi Mac…").frame(maxWidth: .infinity, minHeight: 200)
                 } else if !error.isEmpty {
@@ -782,11 +913,7 @@ struct StatusView: View {
                 }
             }
             Panel("Tong Sampah", symbol: "trash") {
-                Text(formatBytes(Int64(jNum(d, "trash_size"))))
-                    .font(.rounded(18, .semibold))
-                Text("Kosongkan Trash di Finder untuk benar-benar membebaskan ruang.")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                trashContent(statusBytes: Int64(jNum(d, "trash_size")))
             }
         }
     }
@@ -794,7 +921,7 @@ struct StatusView: View {
     private func processes(_ d: [String: Any]) -> some View {
         let procs = Array(jArr(d, "top_processes").prefix(10))
         let maxCPU = max(1, procs.map { jNum($0, "cpu") }.max() ?? 1)
-        return Panel("Proses terberat", symbol: "list.bullet.rectangle") {
+        return Panel("Proses terberat (CPU)", symbol: "list.bullet.rectangle") {
             if procs.isEmpty {
                 Text("Tidak ada data proses.").foregroundStyle(.secondary)
             }
@@ -815,6 +942,69 @@ struct StatusView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 80, alignment: .trailing)
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func trashContent(statusBytes: Int64) -> some View {
+        // mo status mengembalikan 0 B jika ~/.Trash tidak bisa dibaca, jadi utamakan hasil TrashProbe.
+        if let t = trash, t.source != .unavailable {
+            Text(formatBytes(max(t.bytes, statusBytes)))
+                .font(.rounded(18, .semibold))
+            Text(t.source == .finder ? "\(t.items) item, dihitung lewat Finder" : "\(t.items) item")
+                .font(.caption).foregroundStyle(.secondary)
+            Text("Kosongkan Trash di Finder untuk benar-benar membebaskan ruang.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Buka Trash") {
+                NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".Trash"))
+            }
+            .controlSize(.small)
+        } else if trash == nil {
+            Text(statusBytes > 0 ? formatBytes(statusBytes) : "Menghitung…")
+                .font(.rounded(18, .semibold))
+        } else if statusBytes > 0 {
+            Text(formatBytes(statusBytes))
+                .font(.rounded(18, .semibold))
+            Text("Kosongkan Trash di Finder untuk benar-benar membebaskan ruang.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Text("Tidak bisa dibaca")
+                .font(.rounded(18, .semibold))
+                .foregroundStyle(Palette.amber)
+            Text("macOS melindungi Trash. Beri MoleApp Full Disk Access, atau izinkan MoleApp mengontrol Finder, lalu tekan Segarkan.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Buka pengaturan Full Disk Access") { TrashProbe.openFullDiskAccessSettings() }
+                .controlSize(.small)
+        }
+    }
+
+    private var memoryProcesses: some View {
+        let maxRSS = max(1, memProcs.first?.rssBytes ?? 1)
+        return Panel("Proses terberat (RAM)", symbol: "memorychip") {
+            if memProcs.isEmpty {
+                Text("Tidak ada data proses.").foregroundStyle(.secondary)
+            }
+            ForEach(memProcs) { p in
+                HStack(spacing: 10) {
+                    Text(p.name).lineLimit(1).frame(width: 200, alignment: .leading)
+                    GeometryReader { g in
+                        Capsule().fill(Palette.level(p.percent, warn: 10, crit: 20).opacity(0.85))
+                            .frame(width: max(2, g.size.width * CGFloat(Double(p.rssBytes) / Double(maxRSS))))
+                    }
+                    .frame(height: 6)
+                    Text(formatBytes(p.rssBytes))
+                        .font(.system(.callout, design: .rounded)).monospacedDigit()
+                        .frame(width: 80, alignment: .trailing)
+                    Text(String(format: "%.1f%%", p.percent))
+                        .font(.system(.callout, design: .rounded)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 60, alignment: .trailing)
+                }
+                .help("PID \(p.id)")
             }
         }
     }
@@ -985,12 +1175,24 @@ struct UninstallView: View {
     @ObservedObject var runner: CommandRunner
     @State private var query = ""
     @State private var selection: String?
+    // Urutan daftar: "name" atau "size", diingat antar sesi
+    @AppStorage("uninstallSortKey") private var sortKey = "name"
+    @AppStorage("uninstallSortAscending") private var sortAscending = true
 
     private var filtered: [AppEntry] {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard !q.isEmpty else { return store.apps }
-        return store.apps.filter {
+        let base = q.isEmpty ? store.apps : store.apps.filter {
             $0.name.localizedCaseInsensitiveContains(q) || $0.bundleID.localizedCaseInsensitiveContains(q)
+        }
+        return base.sorted { a, b in
+            if sortKey == "size" {
+                let (x, y) = (a.sizeBytes, b.sizeBytes)
+                if x != y { return sortAscending ? x < y : x > y }
+            } else {
+                let r = a.name.localizedCaseInsensitiveCompare(b.name)
+                if r != .orderedSame { return sortAscending ? r == .orderedAscending : r == .orderedDescending }
+            }
+            return a.path < b.path
         }
     }
 
@@ -1019,6 +1221,24 @@ struct UninstallView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     TextField("Cari nama atau bundle ID", text: $query)
                         .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 8) {
+                        Picker("Urutkan", selection: $sortKey) {
+                            Text("Nama").tag("name")
+                            Text("Ukuran").tag("size")
+                        }
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                        Button {
+                            sortAscending.toggle()
+                        } label: {
+                            Label(
+                                sortAscending ? (sortKey == "size" ? "Terkecil" : "A–Z") : (sortKey == "size" ? "Terbesar" : "Z–A"),
+                                systemImage: sortAscending ? "arrow.up" : "arrow.down"
+                            )
+                        }
+                        .help(sortAscending ? "Naik (asc). Klik untuk turun (desc)." : "Turun (desc). Klik untuk naik (asc).")
+                        Spacer(minLength: 0)
+                    }
                     if store.loading {
                         ProgressView("Memindai aplikasi…").frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else if !store.error.isEmpty {
