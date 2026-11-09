@@ -5,6 +5,7 @@
 // eksekusi yang butuh sudo atau pilihan interaktif dibuka di Terminal.
 
 import AppKit
+import ServiceManagement
 import SwiftUI
 
 // MARK: - Palet & Tipografi
@@ -108,13 +109,14 @@ final class LiveMetrics: ObservableObject {
     }
 
     func update(cpu: Double, memUsed: UInt64, memTotal: UInt64, disk: DiskSnapshot, netUp: Double, netDown: Double, bat: BatterySnapshot?) {
-        self.cpu = cpu
-        self.memUsed = memUsed
-        self.memTotal = memTotal
-        self.disk = disk
-        self.netUp = netUp
-        self.netDown = netDown
-        self.battery = bat
+        // Hanya tulis nilai yang berubah: setiap set @Published memicu SwiftUI menghitung ulang view
+        if self.cpu != cpu { self.cpu = cpu }
+        if self.memUsed != memUsed { self.memUsed = memUsed }
+        if self.memTotal != memTotal { self.memTotal = memTotal }
+        if self.disk != disk { self.disk = disk }
+        if self.netUp != netUp { self.netUp = netUp }
+        if self.netDown != netDown { self.netDown = netDown }
+        if self.battery != bat { self.battery = bat }
     }
 
     func applyStatus(_ d: [String: Any]) {
@@ -141,7 +143,7 @@ final class LiveMetrics: ObservableObject {
 // MARK: - Fitur (indeks sama dengan tab lama agar menu bar tetap cocok)
 
 enum Feature: Int, CaseIterable, Identifiable, Hashable {
-    case status = 0, clean, uninstall, analyze, optimize, purge, installer, slim, history
+    case status = 0, clean, uninstall, analyze, optimize, purge, installer, slim, history, settings
 
     var id: Int { rawValue }
 
@@ -156,6 +158,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "Installer"
         case .slim: return "Slim Apps"
         case .history: return "Riwayat & Alat"
+        case .settings: return "Pengaturan Indikator"
         }
     }
 
@@ -170,6 +173,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "externaldrive"
         case .slim: return "scissors"
         case .history: return "clock.arrow.circlepath"
+        case .settings: return "slider.horizontal.3"
         }
     }
 
@@ -184,6 +188,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "File .dmg, .pkg, .iso, .xip, dan .zip yang tertinggal setelah instalasi."
         case .slim: return "Buang irisan Intel dari Universal App milik Anda di Apple Silicon."
         case .history: return "Apa saja yang sudah diubah Mole, plus pengaturan Touch ID, whitelist, dan completion."
+        case .settings: return "Pilih metrik di menu bar, mode tampilan, interval update, dan buka saat login."
         }
     }
 }
@@ -195,7 +200,8 @@ struct FeatureGroup: Identifiable {
     static let all: [FeatureGroup] = [
         FeatureGroup(id: "Pantau", items: [.status, .analyze, .history]),
         FeatureGroup(id: "Kosongkan ruang", items: [.clean, .purge, .installer, .slim]),
-        FeatureGroup(id: "Aplikasi & sistem", items: [.uninstall, .optimize])
+        FeatureGroup(id: "Aplikasi & sistem", items: [.uninstall, .optimize]),
+        FeatureGroup(id: "Pengaturan", items: [.settings])
     ]
 }
 
@@ -629,6 +635,8 @@ struct DashboardRoot: View {
             AnalyzeView(store: model.analyze)
         case .history:
             HistoryView()
+        case .settings:
+            IndicatorSettingsView()
         default:
             CommandFeatureView(feature: f, spec: CommandSpec.make(f), runner: model.runner(f))
                 .id(f)
@@ -1383,5 +1391,153 @@ struct HistoryView: View {
             Label(title, systemImage: symbol).frame(maxWidth: .infinity, alignment: .leading)
         }
         .buttonStyle(.borderless)
+    }
+}
+
+// MARK: - Pengaturan Indikator
+// Pengaturan yang sama dengan menu klik kanan (kunci UserDefaults sama), jadi keduanya selalu sinkron.
+// Setiap perubahan dikirim lewat .indicatorSettingsChanged supaya AppDelegate langsung menggambar ulang menu bar.
+
+struct IndicatorSettingsView: View {
+    @ObservedObject var live = LiveMetrics.shared
+    @AppStorage("cpu") private var cpu = true
+    @AppStorage("mem") private var mem = true
+    @AppStorage("disk") private var disk = true
+    @AppStorage("net") private var net = false
+    @AppStorage("bat") private var bat = false
+    @AppStorage("compact") private var compact = false
+    @AppStorage("interval") private var interval = 2.0
+    @State private var loginOn = false
+    @Environment(\.colorScheme) private var scheme
+
+    private var prefs: IndicatorPrefs {
+        IndicatorPrefs(cpu: cpu, mem: mem, disk: disk, net: net, bat: bat, compact: compact)
+    }
+
+    private func notify() {
+        NotificationCenter.default.post(name: .indicatorSettingsChanged, object: nil)
+    }
+
+    private func resetDefaults() {
+        let d = UserDefaults.standard
+        for k in ["cpu", "mem", "disk", "net", "bat", "compact", "interval"] { d.removeObject(forKey: k) }
+        // @AppStorage membaca nilai bawaan yang didaftarkan AppDelegate
+        cpu = d.bool(forKey: "cpu"); mem = d.bool(forKey: "mem"); disk = d.bool(forKey: "disk")
+        net = d.bool(forKey: "net"); bat = d.bool(forKey: "bat"); compact = d.bool(forKey: "compact")
+        interval = max(1.0, d.double(forKey: "interval"))
+        notify()
+    }
+
+    private var loginBinding: Binding<Bool> {
+        Binding(
+            get: { loginOn },
+            set: { on in
+                do {
+                    if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                } catch {
+                    let a = NSAlert()
+                    a.messageText = "Gagal mengatur 'Buka saat login'"
+                    a.informativeText = "Pastikan MoleApp.app berada di folder /Applications.\n\n\(error.localizedDescription)"
+                    a.runModal()
+                }
+                loginOn = SMAppService.mainApp.status == .enabled
+            }
+        )
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                PageHeader(.settings) {
+                    Button {
+                        resetDefaults()
+                    } label: {
+                        Label("Kembalikan bawaan", systemImage: "arrow.uturn.backward")
+                    }
+                }
+
+                Panel("Pratinjau menu bar", symbol: "menubar.rectangle") {
+                    preview
+                }
+
+                HStack(alignment: .top, spacing: 16) {
+                    Panel("Tampilkan di menu bar", symbol: "checklist") {
+                        metricRow("CPU", "cpu", $cpu)
+                        metricRow("Memori (RAM)", "memorychip", $mem)
+                        metricRow("Sisa SSD", "internaldrive", $disk)
+                        metricRow("Kecepatan Jaringan", "arrow.up.arrow.down", $net)
+                        metricRow("Baterai", "battery.100", $bat)
+                        if bat && live.battery == nil {
+                            Note(text: "Baterai internal tidak terdeteksi, jadi metrik ini tidak tampil di Mac ini.", symbol: "exclamationmark.circle")
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        Panel("Tampilan", symbol: "textformat.size") {
+                            Picker("", selection: $compact) {
+                                Text("2 baris (label di atas, nilai di bawah)").tag(false)
+                                Text("Ringkas (1 baris, ikon + angka)").tag(true)
+                            }
+                            .pickerStyle(.radioGroup)
+                            .labelsHidden()
+                        }
+                        Panel("Interval update", symbol: "timer") {
+                            Picker("", selection: $interval) {
+                                ForEach(indicatorIntervals, id: \.self) { s in
+                                    Text("\(Int(s)) detik").tag(s)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                            Note(text: "Interval lebih panjang lebih hemat CPU dan baterai. Disk dibaca tiap 15 update, baterai tiap 5 update.")
+                        }
+                        Panel("Umum", symbol: "gearshape") {
+                            Toggle("Buka saat login", isOn: loginBinding)
+                                .toggleStyle(.switch)
+                        }
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .onAppear { loginOn = SMAppService.mainApp.status == .enabled }
+        .onChange(of: prefs) { _ in notify() }
+        .onChange(of: interval) { _ in notify() }
+    }
+
+    private func metricRow(_ title: String, _ symbol: String, _ isOn: Binding<Bool>) -> some View {
+        HStack {
+            Label(title, systemImage: symbol)
+            Spacer()
+            Toggle("", isOn: isOn).toggleStyle(.switch).labelsHidden()
+        }
+    }
+
+    /// Gambar indikator memakai renderer yang sama dengan menu bar, dengan angka live saat ini
+    private var preview: some View {
+        let layout = IndicatorLayout(
+            prefs, cpu: live.cpu, memPercent: live.memPercent, diskFree: live.disk.free,
+            up: live.netUp, down: live.netDown, bat: live.battery
+        )
+        let img = layout.render()
+            ?? NSImage(systemSymbolName: "sparkles.rectangle.stack.fill", accessibilityDescription: "MoleApp")
+            ?? NSImage(size: NSSize(width: 16, height: 16))
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Spacer()
+                Image(nsImage: img)
+                    .renderingMode(.template)
+                    .foregroundStyle(scheme == .dark ? Color.white : Color.black)
+                    .padding(.horizontal, 10)
+                    .frame(height: 24)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(0.06))
+                    )
+            }
+            if layout.isEmpty {
+                Note(text: "Semua metrik dimatikan: menu bar hanya menampilkan ikon MoleApp.")
+            }
+        }
     }
 }

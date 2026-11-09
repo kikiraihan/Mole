@@ -85,7 +85,7 @@ final class NetSampler {
     }
 }
 
-struct DiskSnapshot {
+struct DiskSnapshot: Equatable {
     let name: String
     let used: Int64
     let free: Int64
@@ -105,7 +105,7 @@ func sampleDisk() -> DiskSnapshot {
     return DiskSnapshot(name: v.volumeName ?? "Macintosh HD", used: max(0, t - f), free: f, total: t)
 }
 
-struct BatterySnapshot {
+struct BatterySnapshot: Equatable {
     let percent: Int
     let charging: Bool
     let charged: Bool
@@ -154,8 +154,11 @@ func formatNetRate(_ bytesPerSec: Double, short: Bool = false) -> String {
     return short ? "0K" : "0 KB/s"
 }
 
+// Regex dikompilasi sekali saja (sebelumnya dikompilasi ulang untuk setiap potongan output streaming)
+private let ansiRegex = try? NSRegularExpression(pattern: "\\x1B\\[[0-9;?]*[A-Za-z]|\\x1B\\][^\\x07]*\\x07|\\r", options: [])
+
 func stripANSI(_ input: String) -> String {
-    guard let regex = try? NSRegularExpression(pattern: "\\x1B\\[[0-9;?]*[A-Za-z]|\\x1B\\][^\\x07]*\\x07|\\r", options: []) else {
+    guard let regex = ansiRegex else {
         return input
     }
     let range = NSRange(input.startIndex..<input.endIndex, in: input)
@@ -239,6 +242,88 @@ func renderCompact(_ items: [CompactItem]) -> NSImage {
     }
     img.isTemplate = true
     return img
+}
+
+/// Pilihan interval update yang ditawarkan menu klik kanan dan tab Pengaturan Indikator
+let indicatorIntervals: [Double] = [1.0, 2.0, 5.0]
+
+/// Dikirim tab Pengaturan Indikator setelah mengubah UserDefaults supaya menu bar langsung ikut berubah
+extension Notification.Name {
+    static let indicatorSettingsChanged = Notification.Name("id.local.moleapp.indicatorSettingsChanged")
+}
+
+/// Metrik yang ditampilkan di menu bar (kunci UserDefaults sama dengan versi sebelumnya)
+struct IndicatorPrefs: Equatable {
+    var cpu = true, mem = true, disk = true, net = false, bat = false, compact = false
+
+    static func load(_ d: UserDefaults = .standard) -> IndicatorPrefs {
+        IndicatorPrefs(
+            cpu: d.bool(forKey: "cpu"), mem: d.bool(forKey: "mem"), disk: d.bool(forKey: "disk"),
+            net: d.bool(forKey: "net"), bat: d.bool(forKey: "bat"), compact: d.bool(forKey: "compact")
+        )
+    }
+}
+
+/// Isi indikator: kolom (mode 2 baris), item (mode ringkas), dan `key` teks yang tampil.
+/// `key` dipakai untuk melewati render ulang gambar saat angka di menu bar tidak berubah.
+struct IndicatorLayout {
+    let cols: [Col]
+    let items: [CompactItem]
+    let compact: Bool
+    let key: String
+
+    var isEmpty: Bool { cols.isEmpty }
+
+    init(_ p: IndicatorPrefs, cpu: Double, memPercent: Double, diskFree: Int64, up: Double, down: Double, bat: BatterySnapshot?) {
+        var cols: [Col] = []
+        var items: [CompactItem] = []
+
+        if p.cpu {
+            let v = String(format: "%.0f%%", cpu)
+            cols.append(Col(top: "CPU", bottom: v, topIsLabel: true, template: "99%"))
+            items.append(CompactItem(symbol: "cpu", text: v, template: "99%"))
+        }
+        if p.mem {
+            let v = String(format: "%.0f%%", memPercent)
+            cols.append(Col(top: "RAM", bottom: v, topIsLabel: true, template: "99%"))
+            items.append(CompactItem(symbol: "memorychip", text: v, template: "99%"))
+        }
+        if p.disk {
+            // sisa ruang dalam GB desimal, sama seperti Finder
+            let v = String(format: "%.0fGB", Double(diskFree) / 1_000_000_000.0)
+            cols.append(Col(top: "SSD", bottom: v, topIsLabel: true, template: ""))
+            items.append(CompactItem(symbol: "internaldrive", text: v, template: ""))
+        }
+        if p.net {
+            let upS = fmtRate(up, short: true), dn = fmtRate(down, short: true)
+            cols.append(Col(top: "↑" + upS, bottom: "↓" + dn, topIsLabel: false, template: "↓999.9K"))
+            items.append(CompactItem(symbol: "arrow.up.arrow.down", text: "↓" + dn, template: "↓99.9K"))
+        }
+        if p.bat, let b = bat {
+            let v = (b.onAC ? "⚡" : "") + "\(b.percent)%"
+            cols.append(Col(top: "BAT", bottom: v, topIsLabel: true, template: "⚡99%"))
+            items.append(CompactItem(
+                symbol: b.onAC ? "battery.100.bolt" : "battery.100",
+                text: "\(b.percent)%",
+                template: "99%"
+            ))
+        }
+
+        self.cols = cols
+        self.items = items
+        self.compact = p.compact
+        if p.compact {
+            key = "c|" + items.map { $0.symbol + ":" + $0.text }.joined(separator: "|")
+        } else {
+            key = "f|" + cols.map { $0.top + "/" + $0.bottom }.joined(separator: "|")
+        }
+    }
+
+    /// nil kalau semua metrik dimatikan (pemanggil menampilkan ikon aplikasi)
+    func render() -> NSImage? {
+        guard !cols.isEmpty else { return nil }
+        return compact ? renderCompact(items) : renderFull(cols)
+    }
 }
 
 // MARK: - 3. Mole CLI Runner Bridge
@@ -633,6 +718,14 @@ final class Updater: NSObject {
 final class DashboardWindowController: NSObject, NSWindowDelegate {
     let window: NSWindow
     let model = DashboardModel()
+    /// Dipanggil setiap dashboard ditampilkan, supaya metrik live langsung segar walau
+    /// indikator berhenti mengirim data ke SwiftUI selama jendela tertutup.
+    var onShow: (() -> Void)?
+
+    /// Benar hanya saat jendela benar-benar terlihat (tidak tertutup, diminimalkan, atau tertimpa penuh).
+    var isOnScreen: Bool {
+        window.isVisible && window.occlusionState.contains(.visible)
+    }
 
     override init() {
         window = NSWindow(
@@ -657,6 +750,11 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
     }
 
+    // Jendela muncul lagi (dari minimize / tertimpa jendela lain) → segarkan metrik tanpa menunggu tick
+    func windowDidChangeOcclusionState(_ notification: Notification) {
+        if isOnScreen { onShow?() }
+    }
+
     func show(tab: Int? = nil) {
         if let tab, let feature = Feature(rawValue: tab) {
             model.selection = feature
@@ -664,6 +762,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        onShow?()
     }
 
     func updateLiveBanner(cpu: Double, memUsed: UInt64, memTotal: UInt64, disk: DiskSnapshot, netUp: Double, netDown: Double, bat: BatterySnapshot?) {
@@ -678,7 +777,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     let defaults = UserDefaults.standard
     let updater = Updater()
-    lazy var dashboard = DashboardWindowController()
+    // Dashboard baru dibuat saat pertama kali dibuka (dulu ikut terbuat di tick pertama karena
+    // tick() membaca dashboard.window, sehingga seluruh view SwiftUI menetap di memori sejak start)
+    private var dashboardLoaded = false
+    lazy var dashboard: DashboardWindowController = {
+        let d = DashboardWindowController()
+        d.onShow = { [weak self] in self?.pushLive() }
+        self.dashboardLoaded = true
+        return d
+    }()
 
     // Popover ringkas untuk klik kiri (klik kanan tetap membuka menu lengkap)
     lazy var popover: NSPopover = {
@@ -711,13 +818,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             quit: { NSApp.terminate(nil) }
         )
         p.contentViewController = NSHostingController(rootView: PopoverView(actions: actions))
+        self.popoverLoaded = true
         return p
     }()
+    private var popoverLoaded = false
 
     private let cpuSampler = CPUSampler()
     private let netSampler = NetSampler()
     private var timer: Timer?
     private var tickCount = 0
+    private var menuIsOpen = false
+    /// Teks indikator terakhir yang digambar; sama → gambar NSImage lama dipakai lagi
+    private var lastBarKey: String?
 
     private var cpuPct: Double = 0
     private var mem: (used: UInt64, total: UInt64, percent: Double) = (0, 1, 0)
@@ -756,6 +868,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         menu.delegate = self
         buildMenu()
+
+        // Perubahan dari tab Pengaturan Indikator di dashboard
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(indicatorSettingsChanged),
+            name: .indicatorSettingsChanged, object: nil
+        )
 
         _ = cpuSampler.sample()
         _ = netSampler.sample()
@@ -800,6 +918,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         tick()
+        pushLive()
         LiveMetrics.shared.refreshHealth()
         popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
@@ -815,6 +934,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Lepas menu lagi agar klik kiri berikutnya kembali membuka popover
         if menu === self.menu {
             statusItem.menu = nil
+            menuIsOpen = false
         }
     }
 
@@ -838,19 +958,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if tickCount % 5 == 0 { bat = sampleBattery() }
         tickCount += 1
         updateBar()
-        updateRows()
-        LiveMetrics.shared.update(cpu: cpuPct, memUsed: mem.used, memTotal: mem.total, disk: disk, netUp: rate.up, netDown: rate.down, bat: bat)
-        if dashboard.window.isVisible {
-            dashboard.updateLiveBanner(
-                cpu: cpuPct,
-                memUsed: mem.used,
-                memTotal: mem.total,
-                disk: disk,
-                netUp: rate.up,
-                netDown: rate.down,
-                bat: bat
-            )
+        // Baris menu klik kanan hanya diperbarui saat menunya terbuka (menuWillOpen juga memanggil tick)
+        if menuIsOpen { updateRows() }
+        // Metrik live untuk SwiftUI hanya dikirim saat popover atau dashboard terlihat;
+        // dulu dikirim dua kali per tick (LiveMetrics + updateLiveBanner) walau semua jendela tertutup.
+        let popoverVisible = popoverLoaded && popover.isShown
+        let dashboardVisible = dashboardLoaded && dashboard.isOnScreen
+        if popoverVisible || dashboardVisible {
+            pushLive()
         }
+    }
+
+    /// Kirim metrik terakhir ke LiveMetrics (popover, sidebar dashboard, tab Pengaturan Indikator)
+    private func pushLive() {
+        LiveMetrics.shared.update(cpu: cpuPct, memUsed: mem.used, memTotal: mem.total, disk: disk, netUp: rate.up, netDown: rate.down, bat: bat)
     }
 
     private func renderIcon() -> NSImage {
@@ -863,56 +984,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateBar() {
         guard let btn = statusItem.button else { return }
+
+        // Isi kolom kini dibangun IndicatorLayout (dipakai juga oleh pratinjau di tab Pengaturan Indikator)
+        let layout = IndicatorLayout(
+            IndicatorPrefs.load(defaults),
+            cpu: cpuPct, memPercent: mem.percent, diskFree: disk.free,
+            up: rate.up, down: rate.down, bat: bat
+        )
+        // Angka sama dengan tick sebelumnya → tidak perlu menggambar ulang NSImage
+        // (render teks + SF Symbol adalah pekerjaan termahal tiap tick)
+        guard layout.key != lastBarKey else { return }
+        lastBarKey = layout.key
+
         // Tampilan indikator disamakan dengan LiteMonitor: gambar kolom tanpa ikon aplikasi
         btn.title = ""
         btn.imagePosition = .imageOnly
 
-        let showCPU = defaults.bool(forKey: "cpu")
-        let showMem = defaults.bool(forKey: "mem")
-        let showDisk = defaults.bool(forKey: "disk")
-        let showNet = defaults.bool(forKey: "net")
-        let showBat = defaults.bool(forKey: "bat")
-        let compact = defaults.bool(forKey: "compact")
-
-        var cols: [Col] = []
-        var items: [CompactItem] = []
-
-        if showCPU {
-            let v = String(format: "%.0f%%", cpuPct)
-            cols.append(Col(top: "CPU", bottom: v, topIsLabel: true, template: "99%"))
-            items.append(CompactItem(symbol: "cpu", text: v, template: "99%"))
-        }
-        if showMem {
-            let v = String(format: "%.0f%%", mem.percent)
-            cols.append(Col(top: "RAM", bottom: v, topIsLabel: true, template: "99%"))
-            items.append(CompactItem(symbol: "memorychip", text: v, template: "99%"))
-        }
-        if showDisk {
-            // sisa ruang dalam GB desimal, sama seperti Finder
-            let v = String(format: "%.0fGB", Double(disk.free) / 1_000_000_000.0)
-            cols.append(Col(top: "SSD", bottom: v, topIsLabel: true, template: ""))
-            items.append(CompactItem(symbol: "internaldrive", text: v, template: ""))
-        }
-        if showNet {
-            let up = fmtRate(rate.up, short: true), dn = fmtRate(rate.down, short: true)
-            cols.append(Col(top: "↑" + up, bottom: "↓" + dn, topIsLabel: false, template: "↓999.9K"))
-            items.append(CompactItem(symbol: "arrow.up.arrow.down", text: "↓" + dn, template: "↓99.9K"))
-        }
-        if showBat, let b = bat {
-            let v = (b.onAC ? "⚡" : "") + "\(b.percent)%"
-            cols.append(Col(top: "BAT", bottom: v, topIsLabel: true, template: "⚡99%"))
-            items.append(CompactItem(
-                symbol: b.onAC ? "battery.100.bolt" : "battery.100",
-                text: "\(b.percent)%",
-                template: "99%"
-            ))
-        }
-
-        if cols.isEmpty {
+        if let img = layout.render() {
+            btn.image = img
+        } else {
             // semua metrik dimatikan → tampilkan ikon kecil saja supaya popover/menu tetap bisa dibuka
             btn.image = renderIcon()
-        } else {
-            btn.image = compact ? renderCompact(items) : renderFull(cols)
         }
     }
 
@@ -944,7 +1036,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ("📦 Project Artifact Purge (`mo purge`)", 5, "6"),
             ("💿 Installer Cleanup (`mo installer`)", 6, "7"),
             ("✂️ Slim Universal Apps (`mo slim`)", 7, "8"),
-            ("🕓 Audit History & Tools (`mo history`)", 8, "9")
+            ("🕓 Audit History & Tools (`mo history`)", 8, "9"),
+            ("⚙️ Pengaturan Indikator", Feature.settings.rawValue, "0")
         ]
         for (label, tabIdx, key) in features {
             let item = NSMenuItem(title: label, action: #selector(openDashboardTab(_:)), keyEquivalent: key)
@@ -987,7 +1080,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Submenu: Interval Update
         let intMenu = NSMenu()
-        for s in [1.0, 2.0, 5.0] {
+        for s in indicatorIntervals {
             let it = NSMenuItem(title: "\(Int(s)) detik", action: #selector(setInterval(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = s
@@ -1037,6 +1130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuWillOpen(_ menu: NSMenu) {
+        if menu === self.menu { menuIsOpen = true }
         tick()
         updateChecks()
     }
@@ -1091,6 +1185,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         defaults.set(v, forKey: "interval")
         updateChecks()
         startTimer()
+    }
+
+    /// Tab Pengaturan Indikator mengubah UserDefaults → sinkronkan centang menu, gambar ulang, dan interval timer
+    @objc private func indicatorSettingsChanged() {
+        updateChecks()
+        lastBarKey = nil
+        updateBar()
+        let sec = max(1.0, defaults.double(forKey: "interval"))
+        if timer?.timeInterval != sec { startTimer() }
     }
 
     @objc private func toggleLogin() {

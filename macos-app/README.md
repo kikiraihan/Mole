@@ -14,6 +14,7 @@ Aplikasi macOS **ringan** berbasis **Swift + SwiftUI + AppKit** yang menggabungk
    - **Installer (`mo installer`)**: Temukan file installer `.dmg`, `.pkg`, `.iso`, `.xip`, `.zip`.
    - **Slim Apps (`mo slim`)**: Pindai dan hapus arsitektur Intel (`x86_64`) dari Universal Apps di Apple Silicon.
    - **Riwayat & Alat (`mo history --json`)**: Daftar sesi operasi dan file yang dihapus/dipindah ke Trash, serta pintasan Touch ID untuk `sudo` (`mo touchid`), shell completion (`mo completion`), whitelist clean/optimize, folder proyek purge, folder konfigurasi, dan log operasi.
+   - **Pengaturan Indikator**: Pilih metrik yang tampil di menu bar (CPU, RAM, sisa SSD, jaringan, baterai), mode 2 baris/ringkas, interval update, dan Buka saat Login, lengkap dengan pratinjau indikator live. Sinkron dengan menu klik kanan.
 
 ### Desain
 Tema "liang tikus tanah": aksen merah muda hidung mole `#D9668A`, hijau lumut `#6E9F6B` untuk kondisi sehat, amber `#E0A43A` untuk waspada, merah bara `#D9534F` untuk kritis. Angka dan judul memakai SF Rounded; latar mengikuti mode terang/gelap macOS.
