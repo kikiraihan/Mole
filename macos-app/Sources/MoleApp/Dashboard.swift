@@ -103,6 +103,8 @@ struct TrashInfo {
     var bytes: Int64 = 0
     var items = 0
     var source: Source = .unavailable
+    /// Jumlah item yang ukurannya tidak bisa dihitung Finder (hasil jadi batas bawah).
+    var unmeasured = 0
 }
 
 enum TrashProbe {
@@ -131,18 +133,58 @@ enum TrashProbe {
     }
 
     /// Finder menghitung Trash semua volume. Pertama kali macOS meminta izin Automation untuk Finder.
+    /// Finder mengembalikan `missing value` untuk ukuran folder/paket yang belum pernah ia hitung,
+    /// jadi coba `size`, lalu `physical size`, lalu jumlahkan file di dalamnya, dan ulangi sekali
+    /// setelah jeda karena Finder menghitung ukuran folder di latar belakang.
     private static func finder() -> TrashInfo? {
+        guard var info = runFinderScript() else { return nil }
+        if info.items > 0 && (info.bytes == 0 || info.unmeasured > 0) {
+            Thread.sleep(forTimeInterval: 1.5)
+            if let again = runFinderScript(), again.bytes >= info.bytes { info = again }
+        }
+        return info
+    }
+
+    private static func runFinderScript() -> TrashInfo? {
         let script = """
+        on sumList(L)
+            set acc to 0
+            repeat with v in L
+                try
+                    set x to contents of v
+                    if x is not missing value then set acc to acc + x
+                end try
+            end repeat
+            return acc
+        end sumList
+
         tell application "Finder"
             set n to count of items of trash
             set t to 0
+            set unknown to 0
             repeat with i in (items of trash)
+                set s to missing value
                 try
-                    set s to physical size of i
-                    if s is not missing value then set t to t + s
+                    set s to size of i
                 end try
+                if s is missing value then
+                    try
+                        set s to physical size of i
+                    end try
+                end if
+                if s is missing value then
+                    try
+                        set s to my sumList(size of every file of entire contents of i)
+                        if s is 0 then set s to missing value
+                    end try
+                end if
+                if s is missing value then
+                    set unknown to unknown + 1
+                else
+                    set t to t + s
+                end if
             end repeat
-            return (n as text) & "|" & (t as text)
+            return (n as text) & "|" & (t as text) & "|" & (unknown as text)
         end tell
         """
         let proc = Process()
@@ -152,16 +194,20 @@ enum TrashProbe {
         proc.standardOutput = out
         proc.standardError = FileHandle.nullDevice
         guard (try? proc.run()) != nil else { return nil }
+        // Trash yang sangat besar bisa membuat Finder lama menjawab; hentikan setelah 30 detik.
+        let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 30, execute: killer)
         let data = out.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
+        killer.cancel()
         guard proc.terminationStatus == 0 else { return nil }
         let parts = String(decoding: data, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(separator: "|")
-        guard parts.count == 2, let n = Int(parts[0]) else { return nil }
-        // AppleScript bisa menulis angka besar sebagai 1.2345E+9
+        guard parts.count == 3, let n = Int(parts[0]) else { return nil }
+        // AppleScript bisa menulis angka besar sebagai 1.2345E+9, dan memakai koma desimal di locale Indonesia
         let bytes = Double(parts[1].replacingOccurrences(of: ",", with: ".")) ?? 0
-        return TrashInfo(bytes: Int64(bytes), items: n, source: .finder)
+        return TrashInfo(bytes: Int64(bytes), items: n, source: .finder, unmeasured: Int(parts[2]) ?? 0)
     }
 
     static func openFullDiskAccessSettings() {
@@ -950,10 +996,17 @@ struct StatusView: View {
     private func trashContent(statusBytes: Int64) -> some View {
         // mo status mengembalikan 0 B jika ~/.Trash tidak bisa dibaca, jadi utamakan hasil TrashProbe.
         if let t = trash, t.source != .unavailable {
-            Text(formatBytes(max(t.bytes, statusBytes)))
+            Text((t.source == .finder && t.unmeasured > 0 ? "≥ " : "") + formatBytes(max(t.bytes, statusBytes)))
                 .font(.rounded(18, .semibold))
             Text(t.source == .finder ? "\(t.items) item, dihitung lewat Finder" : "\(t.items) item")
                 .font(.caption).foregroundStyle(.secondary)
+            if t.source == .finder && t.unmeasured > 0 {
+                Text("Ukuran \(t.unmeasured) item belum bisa dihitung Finder, jadi angka di atas batas bawah. Beri Full Disk Access agar akurat.")
+                    .font(.caption).foregroundStyle(Palette.amber)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Buka pengaturan Full Disk Access") { TrashProbe.openFullDiskAccessSettings() }
+                    .controlSize(.small)
+            }
             Text("Kosongkan Trash di Finder untuk benar-benar membebaskan ruang.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
