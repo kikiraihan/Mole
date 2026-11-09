@@ -65,6 +65,15 @@ jobs:
           screencapture -x macos-app/dist/screens/dashboard.png || true
           kill "$APP_PID" || true
 
+          # Alur pengguna: mode gelap, app start tanpa dashboard, dashboard dibuka belakangan
+          osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true' || true
+          sleep 2
+          macos-app/build/MoleApp.app/Contents/MacOS/MoleApp --dashboard-delay 12 &
+          APP_PID=$!
+          sleep 30
+          screencapture -x macos-app/dist/screens/dashboard-late-dark.png || true
+          kill "$APP_PID" || true
+
       - uses: actions/upload-artifact@v4
         if: "!startsWith(github.ref, 'refs/tags/')"
         continue-on-error: true

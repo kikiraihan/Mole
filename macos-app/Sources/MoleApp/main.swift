@@ -767,6 +767,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--dashboard") {
             dashboard.show(tab: 0)
         }
+        // --dashboard-delay N: buka dashboard N detik setelah start, meniru membuka dashboard
+        // belakangan setelah timer berjalan (dipakai smoke test CI)
+        if let i = CommandLine.arguments.firstIndex(of: "--dashboard-delay"),
+           i + 1 < CommandLine.arguments.count, let sec = Double(CommandLine.arguments[i + 1]) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + sec) { [weak self] in
+                self?.dashboard.show(tab: nil)
+            }
+        }
         // --popover: buka popover saat start (dipakai smoke test CI untuk tangkapan layar)
         if CommandLine.arguments.contains("--popover") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
