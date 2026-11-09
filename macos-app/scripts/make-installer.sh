@@ -63,7 +63,7 @@ if [[ -d "$DEST/$APP" ]]; then
     rm -rf "$DEST/$APP" # SAFE: removes previous MoleApp.app bundle before installing the new one
 fi
 cp -R "$APP" "$DEST/"
-xattr -cr "$DEST/$APP" 2> /dev/null || true
+/usr/bin/xattr -cr "$DEST/$APP" 2> /dev/null || true
 
 echo "▶ Menjalankan MoleApp..."
 open "$DEST/$APP" --args --dashboard

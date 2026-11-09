@@ -598,8 +598,8 @@ final class Updater: NSObject {
                 if mv "$3" "$4"; then
                   if mv "$2" "$3"; then rm -rf "$4"; else mv "$4" "$3"; fi
                 fi
-                xattr -cr "$3" 2>/dev/null
-                open "$3"
+                /usr/bin/xattr -cr "$3" 2>/dev/null
+                /usr/bin/open "$3"
                 """
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/bin/sh")

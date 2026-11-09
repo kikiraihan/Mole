@@ -98,7 +98,7 @@ jobs:
             1. Unduh **MoleApp.zip**, ekstrak, lalu pindahkan **MoleApp.app** ke `/Applications`.
             2. Aplikasi ditandatangani ad-hoc (belum dinotarisasi Apple), jadi hapus karantina sekali:
                ```bash
-               xattr -cr /Applications/MoleApp.app && open /Applications/MoleApp.app
+               /usr/bin/xattr -cr /Applications/MoleApp.app && open /Applications/MoleApp.app
                ```
             Atau unduh **install-MoleApp.zip**, ekstrak, lalu jalankan `bash install-MoleApp.command`.
 
@@ -121,7 +121,7 @@ jobs:
             1. Unduh **MoleApp.zip**, ekstrak, lalu pindahkan **MoleApp.app** ke `/Applications`.
             2. Aplikasi ditandatangani ad-hoc (belum dinotarisasi Apple), jadi hapus karantina sekali:
                ```bash
-               xattr -cr /Applications/MoleApp.app && open /Applications/MoleApp.app
+               /usr/bin/xattr -cr /Applications/MoleApp.app && open /Applications/MoleApp.app
                ```
             Atau unduh **install-MoleApp.zip**, ekstrak, lalu jalankan `bash install-MoleApp.command`.
 
