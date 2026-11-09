@@ -592,8 +592,10 @@ struct SidebarLive: View {
 struct DashboardRoot: View {
     @ObservedObject var model: DashboardModel
 
+    // Sidebar dibuat dengan HStack biasa, bukan NavigationSplitView: di macOS 26.3 dashboard
+    // pernah tampil kosong (bingkai tergambar, isi tidak) meski SwiftUI tetap menghitung layout.
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             List(selection: $model.selection) {
                 ForEach(FeatureGroup.all) { group in
                     Section(group.id) {
@@ -603,10 +605,14 @@ struct DashboardRoot: View {
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 215, max: 260)
+            .listStyle(.sidebar)
             .safeAreaInset(edge: .bottom) { SidebarLive() }
-        } detail: {
+            .frame(width: 215)
+
+            Divider()
+
             detail(for: model.selection ?? .status)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .tint(Palette.nose)
         .frame(minWidth: 880, minHeight: 580)
