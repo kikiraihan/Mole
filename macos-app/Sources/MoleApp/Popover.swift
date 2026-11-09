@@ -9,6 +9,7 @@ struct PopoverActions {
     let openTab: (Int?) -> Void
     let openTerminal: () -> Void
     let openMenu: () -> Void
+    let checkUpdate: () -> Void
     let quit: () -> Void
 }
 
@@ -107,6 +108,16 @@ struct PopoverView: View {
             }
 
             Divider()
+
+            if let v = live.updateVersion {
+                Button(action: actions.checkUpdate) {
+                    Label("Update tersedia: \(v)", systemImage: "arrow.down.circle.fill")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(Palette.nose)
+                .help("Unduh dan pasang versi baru MoleApp")
+            }
 
             HStack(spacing: 12) {
                 Button("Buka dashboard") { actions.openTab(nil) }
