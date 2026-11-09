@@ -717,6 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let cpuSampler = CPUSampler()
     private let netSampler = NetSampler()
     private var timer: Timer?
+    private var tickCount = 0
 
     private var cpuPct: Double = 0
     private var mem: (used: UInt64, total: UInt64, percent: Double) = (0, 1, 0)
@@ -766,6 +767,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if CommandLine.arguments.contains("--dashboard") {
             dashboard.show(tab: 0)
+        }
+        // --dashboard-delay N: buka dashboard N detik setelah start, meniru membuka dashboard
+        // belakangan setelah timer berjalan (dipakai smoke test CI)
+        if let i = CommandLine.arguments.firstIndex(of: "--dashboard-delay"),
+           i + 1 < CommandLine.arguments.count, let sec = Double(CommandLine.arguments[i + 1]) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + sec) { [weak self] in
+                self?.dashboard.show(tab: nil)
+            }
         }
         // --popover: buka popover saat start (dipakai smoke test CI untuk tangkapan layar)
         if CommandLine.arguments.contains("--popover") {
@@ -824,8 +833,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cpuPct = cpuSampler.sample()
         mem = sampleMemory()
         rate = netSampler.sample()
-        disk = sampleDisk()
-        bat = sampleBattery()
+        // disk & baterai jarang berubah → diambil lebih jarang (sampleDisk memanggil CacheDelete, cukup mahal)
+        if tickCount % 15 == 0 { disk = sampleDisk() }
+        if tickCount % 5 == 0 { bat = sampleBattery() }
+        tickCount += 1
         updateBar()
         updateRows()
         LiveMetrics.shared.update(cpu: cpuPct, memUsed: mem.used, memTotal: mem.total, disk: disk, netUp: rate.up, netDown: rate.down, bat: bat)
