@@ -717,6 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let cpuSampler = CPUSampler()
     private let netSampler = NetSampler()
     private var timer: Timer?
+    private var tickCount = 0
 
     private var cpuPct: Double = 0
     private var mem: (used: UInt64, total: UInt64, percent: Double) = (0, 1, 0)
@@ -832,8 +833,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cpuPct = cpuSampler.sample()
         mem = sampleMemory()
         rate = netSampler.sample()
-        disk = sampleDisk()
-        bat = sampleBattery()
+        // disk & baterai jarang berubah → diambil lebih jarang (sampleDisk memanggil CacheDelete, cukup mahal)
+        if tickCount % 15 == 0 { disk = sampleDisk() }
+        if tickCount % 5 == 0 { bat = sampleBattery() }
+        tickCount += 1
         updateBar()
         updateRows()
         LiveMetrics.shared.update(cpu: cpuPct, memUsed: mem.used, memTotal: mem.total, disk: disk, netUp: rate.up, netDown: rate.down, bat: bat)
