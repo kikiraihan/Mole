@@ -109,7 +109,10 @@ jobs:
           skip-cache: true
 
       - name: Fetch the Windows CLI for the skill audit
-        run: git fetch --no-tags --depth=1 origin windows:refs/remotes/origin/windows
+        # Forks may not carry the windows branch; fall back to upstream so the audit stays strict.
+        run: |
+          git fetch --no-tags --depth=1 origin windows:refs/remotes/origin/windows \
+            || git fetch --no-tags --depth=1 https://github.com/tw93/Mole.git windows:refs/remotes/origin/windows
 
       - name: Run check script
         env:
