@@ -98,6 +98,8 @@ final class LiveMetrics: ObservableObject {
     @Published var health: Int?
     @Published var healthMsg: String = ""
     @Published var healthLoading = false
+    /// Diisi Updater saat ada rilis MoleApp yang lebih baru (ditampilkan di popover)
+    @Published var updateVersion: String?
 
     private var lastHealthAt: Date?
 

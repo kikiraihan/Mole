@@ -349,6 +349,9 @@ final class MoleBridge {
 }
 
 // MARK: - 4. Auto-Updater (pola mac-os-lite-monitor / PasteLAN)
+// Cek diam-diam saat app dibuka lalu sehari sekali. "Update sekarang" mengunduh MoleApp.zip,
+// memverifikasi isinya, lalu menukar .app setelah MoleApp keluar (versi lama dicadangkan dulu)
+// dan membukanya lagi. Pengaturan (UserDefaults) tetap tersimpan.
 
 final class Updater: NSObject {
     let repo = "kikiraihan/mole"
@@ -356,34 +359,76 @@ final class Updater: NSObject {
     let menuItem = NSMenuItem(title: "Cek pembaruan…", action: #selector(Updater.checkNow), keyEquivalent: "")
     typealias Release = (version: String, zip: URL?, page: URL)
     var latest: Release?
+    var timer: Timer?
 
     static var current: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
     }
+
+    /// "app-v1.2.0" lebih baru dari "1.1.0"? (awalan app-v / v diabaikan)
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        func parts(_ s: String) -> [Int] {
+            var t = s
+            if t.hasPrefix("app-") { t.removeFirst(4) }
+            return t.trimmingCharacters(in: CharacterSet(charactersIn: "vV")).split(separator: ".")
+                .map { part in Int(part.prefix(while: { $0.isNumber })) ?? 0 }
+        }
+        let x = parts(a), y = parts(b)
+        for i in 0..<max(x.count, y.count) {
+            let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0
+            if p != q { return p > q }
+        }
+        return false
+    }
+
+    var hasUpdate: Bool { latest.map { Updater.isNewer($0.version, than: Updater.current) } ?? false }
 
     override init() {
         super.init()
         menuItem.target = self
     }
 
+    /// Cek diam-diam saat aplikasi dibuka lalu sehari sekali; kalau ada versi baru, judul menu berubah
+    func start() {
+        check { [weak self] _ in self?.refreshMenu() }
+        let t = Timer(timeInterval: 24 * 3600, repeats: true) { [weak self] _ in
+            self?.check { _ in self?.refreshMenu() }
+        }
+        t.tolerance = 3600
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
+    }
+
+    func refreshMenu() {
+        menuItem.isEnabled = true
+        if let l = latest, hasUpdate {
+            menuItem.title = "Update tersedia: \(l.version)…"
+            LiveMetrics.shared.updateVersion = l.version
+        } else {
+            menuItem.title = "Cek pembaruan…"
+            LiveMetrics.shared.updateVersion = nil
+        }
+    }
+
+    /// Ambil rilis MoleApp terbaru. Daftar rilis difilter ke tag app-v* (bukan releases/latest),
+    /// karena repo yang sama juga bisa berisi rilis Mole CLI (V*).
     func check(_ done: @escaping (Bool) -> Void) {
-        guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases") else { return done(false) }
+        guard let url = URL(string: "https://api.github.com/repos/\(repo)/releases?per_page=30") else { return done(false) }
         var req = URLRequest(url: url)
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        req.timeoutInterval = 12
+        req.timeoutInterval = 15
         URLSession.shared.dataTask(with: req) { data, _, _ in
             var found: Release?
             if let data, let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                 for item in list {
-                    guard let tag = item["tag_name"] as? String,
-                          let pageStr = item["html_url"] as? String,
-                          let page = URL(string: pageStr) else { continue }
+                    guard let tag = item["tag_name"] as? String, tag.hasPrefix("app-v"),
+                          (item["draft"] as? Bool) != true, (item["prerelease"] as? Bool) != true,
+                          let page = (item["html_url"] as? String).flatMap({ URL(string: $0) }) else { continue }
                     let assets = item["assets"] as? [[String: Any]] ?? []
-                    let zipURL = (assets.first { ($0["name"] as? String) == "MoleApp.zip" }?["browser_download_url"] as? String)
+                    let zipURL = (assets.first { ($0["name"] as? String) == "\(self.appName).zip" }?["browser_download_url"] as? String)
                         .flatMap { URL(string: $0) }
-                    if tag.hasPrefix("app-v") || zipURL != nil {
+                    if found == nil || Updater.isNewer(tag, than: found!.version) {
                         found = (tag, zipURL, page)
-                        break
                     }
                 }
             }
@@ -399,30 +444,106 @@ final class Updater: NSObject {
         menuItem.isEnabled = false
         check { [weak self] ok in
             guard let self else { return }
-            self.menuItem.title = "Cek pembaruan…"
-            self.menuItem.isEnabled = true
+            self.refreshMenu()
             let a = NSAlert()
             NSApp.activate(ignoringOtherApps: true)
             guard ok, let l = self.latest else {
-                a.messageText = "Belum ada rilis baru atau gagal mengecek"
-                a.informativeText = "Versi terpasang: v\(Updater.current)"
+                a.messageText = "Gagal mengecek pembaruan"
+                a.informativeText = "Periksa koneksi internet, lalu coba lagi.\nVersi terpasang: v\(Updater.current)"
                 a.runModal()
                 return
             }
-            if l.version == "app-v\(Updater.current)" {
+            guard self.hasUpdate else {
                 a.messageText = "MoleApp sudah versi terbaru"
                 a.informativeText = "Versi terpasang: v\(Updater.current)"
                 a.runModal()
                 return
             }
-            a.messageText = "Rilis terbaru di GitHub: \(l.version)"
-            a.informativeText = "Versi terpasang: v\(Updater.current)\nKlik 'Buka Halaman Rilis' untuk mengunduh MoleApp.zip terbaru."
-            a.addButton(withTitle: "Buka Halaman Rilis")
-            a.addButton(withTitle: "Tutup")
-            if a.runModal() == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(l.page)
+            a.messageText = "MoleApp \(l.version) tersedia"
+            a.informativeText = "Versi terpasang: v\(Updater.current).\n\nMoleApp akan ditutup, diganti versi baru (termasuk Mole CLI di dalamnya), lalu dibuka lagi. Pengaturan tetap tersimpan."
+            a.addButton(withTitle: "Update sekarang")
+            a.addButton(withTitle: "Lihat rilis")
+            a.addButton(withTitle: "Nanti")
+            switch a.runModal() {
+            case .alertFirstButtonReturn: self.install(l)
+            case .alertSecondButtonReturn: NSWorkspace.shared.open(l.page)
+            default: break
             }
         }
+    }
+
+    /// Unduh .zip rilis, ekstrak, verifikasi, lalu ganti .app lama setelah aplikasi ini keluar
+    func install(_ l: Release) {
+        let dest = Bundle.main.bundleURL
+        // tanpa file .zip, bukan .app, atau folder tidak bisa ditulis → unduh manual dari halaman rilis
+        guard let zip = l.zip, dest.pathExtension == "app",
+              FileManager.default.isWritableFile(atPath: dest.deletingLastPathComponent().path) else {
+            NSWorkspace.shared.open(l.page)
+            return
+        }
+        menuItem.title = "Mengunduh \(l.version)…"
+        menuItem.isEnabled = false
+        URLSession.shared.downloadTask(with: zip) { tmp, _, err in
+            let fm = FileManager.default
+            let work = fm.temporaryDirectory.appendingPathComponent("\(self.appName)-update-\(UUID().uuidString)")
+            let zipFile = work.appendingPathComponent("update.zip")
+            let newApp = work.appendingPathComponent("\(self.appName).app")
+            var problem: String?
+            if let tmp {
+                do {
+                    // file sementara dihapus setelah handler ini selesai → pindahkan sekarang
+                    try fm.createDirectory(at: work, withIntermediateDirectories: true)
+                    try fm.moveItem(at: tmp, to: zipFile)
+                    let unzip = Process()
+                    unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+                    unzip.arguments = ["-x", "-k", zipFile.path, work.path]
+                    try unzip.run()
+                    unzip.waitUntilExit()
+                    if unzip.terminationStatus != 0 || !fm.fileExists(atPath: newApp.path) {
+                        problem = "File rilis tidak berisi \(self.appName).app."
+                    } else if Bundle(url: newApp)?.bundleIdentifier != Bundle.main.bundleIdentifier {
+                        // tolak bundle lain yang menyamar sebagai MoleApp
+                        problem = "Bundle di file rilis bukan MoleApp (bundle ID berbeda)."
+                    }
+                } catch {
+                    problem = error.localizedDescription
+                }
+            } else {
+                problem = err?.localizedDescription ?? "Unduhan gagal."
+            }
+            DispatchQueue.main.async {
+                if let problem { return self.fail(problem, l.page) }
+                // skrip kecil: tunggu aplikasi ini keluar, tukar .app (lama dicadangkan dulu), lalu buka lagi
+                let script = """
+                while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
+                if mv "$3" "$4"; then
+                  if mv "$2" "$3"; then rm -rf "$4"; else mv "$4" "$3"; fi
+                fi
+                xattr -cr "$3" 2>/dev/null
+                open "$3"
+                """
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/bin/sh")
+                p.arguments = ["-c", script, "sh", String(getpid()), newApp.path, dest.path,
+                               work.appendingPathComponent("old.app").path]
+                do {
+                    try p.run()
+                } catch {
+                    return self.fail(error.localizedDescription, l.page)
+                }
+                NSApp.terminate(nil)
+            }
+        }.resume()
+    }
+
+    func fail(_ msg: String, _ page: URL) {
+        refreshMenu()
+        let a = NSAlert()
+        a.messageText = "Update gagal"
+        a.informativeText = "\(msg)\n\nHalaman rilis akan dibuka supaya Anda bisa mengunduh manual."
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
+        NSWorkspace.shared.open(page)
     }
 }
 
@@ -503,6 +624,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.popover.performClose(nil)
                 self?.showMenu()
             },
+            checkUpdate: { [weak self] in
+                guard let self else { return }
+                self.popover.performClose(nil)
+                self.updater.checkNow()
+            },
             quit: { NSApp.terminate(nil) }
         )
         p.contentViewController = NSHostingController(rootView: PopoverView(actions: actions))
@@ -557,6 +683,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         startTimer()
 
         LiveMetrics.shared.refreshHealth(force: true)
+        updater.start()
 
         if CommandLine.arguments.contains("--dashboard") {
             dashboard.show(tab: 0)

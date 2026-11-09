@@ -20,6 +20,8 @@ Tema "liang tikus tanah": aksen merah muda hidung mole `#D9668A`, hijau lumut `#
 
 ## Instalasi
 
+> **Auto update (mulai v1.2.0):** MoleApp mengecek rilis `app-v*` terbaru saat dibuka lalu sehari sekali. Jika ada versi baru, popover menampilkan **"Update tersedia"** dan menu klik kanan berubah menjadi **"Update tersedia: app-v…"**. Klik **Update sekarang** → MoleApp mengunduh `MoleApp.zip`, memverifikasi bundle ID-nya, menutup diri, mengganti `.app` (versi lama dicadangkan dulu), lalu membuka lagi. Versi 1.0.0 dan 1.1.0 belum punya fitur ini, jadi pasang v1.2.0 secara manual sekali.
+
 ### Opsi A: Unduh `.app` jadi dari GitHub Releases (Tanpa Xcode / Tanpa Install CLI Terpisah)
 Seluruh engine Mole CLI beserta binary Go (`analyze-go` & `status-go`) sudah dibundle di dalam `MoleApp.app/Contents/Resources/mole-cli/`.
 
