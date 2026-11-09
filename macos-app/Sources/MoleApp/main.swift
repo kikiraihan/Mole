@@ -162,6 +162,85 @@ func stripANSI(_ input: String) -> String {
     return regex.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: "")
 }
 
+// MARK: - 2b. Render Indikator Menu Bar (disamakan dengan LiteMonitor)
+// Digambar sebagai NSImage template: otomatis ikut warna menu bar terang/gelap,
+// lebar kolom dikunci pakai template supaya ikon tidak "goyang" saat angka berubah.
+
+func fmtRate(_ b: Double, short: Bool) -> String {
+    let k = b / 1024
+    if k < 1000 { return String(format: short ? "%.1fK" : "%.1f KB/s", k) }
+    return String(format: short ? "%.1fM" : "%.1f MB/s", k / 1024)
+}
+
+struct Col { let top: String; let bottom: String; let topIsLabel: Bool; let template: String }
+struct CompactItem { let symbol: String; let text: String; let template: String }
+
+func textWidth(_ s: String, _ f: NSFont) -> CGFloat {
+    (s as NSString).size(withAttributes: [.font: f]).width
+}
+
+/// Mode normal: 2 baris (label di atas, nilai di bawah)
+func renderFull(_ cols: [Col]) -> NSImage {
+    let labelFont = NSFont.systemFont(ofSize: 8, weight: .semibold)
+    let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 9.5, weight: .semibold)
+    let gap: CGFloat = 5 // padding tipis antar kolom supaya angka tidak menempel, tetap compact
+    let widths = cols.map { c -> CGFloat in
+        let tf = c.topIsLabel ? labelFont : valueFont
+        return ceil(max(textWidth(c.top, tf), textWidth(c.bottom, valueFont), textWidth(c.template, valueFont)))
+    }
+    let total = widths.reduce(0, +) + gap * CGFloat(max(cols.count - 1, 0))
+    let img = NSImage(size: NSSize(width: max(total, 1), height: 22), flipped: true) { _ in
+        let ps = NSMutableParagraphStyle()
+        ps.alignment = .center
+        var x: CGFloat = 0
+        for (i, c) in cols.enumerated() {
+            let topAttr: [NSAttributedString.Key: Any] = [
+                .font: c.topIsLabel ? labelFont : valueFont, .foregroundColor: NSColor.black, .paragraphStyle: ps
+            ]
+            let botAttr: [NSAttributedString.Key: Any] = [
+                .font: valueFont, .foregroundColor: NSColor.black, .paragraphStyle: ps
+            ]
+            (c.top as NSString).draw(in: NSRect(x: x, y: 0, width: widths[i], height: 11), withAttributes: topAttr)
+            (c.bottom as NSString).draw(in: NSRect(x: x, y: 10, width: widths[i], height: 12), withAttributes: botAttr)
+            x += widths[i] + gap
+        }
+        return true
+    }
+    img.isTemplate = true
+    return img
+}
+
+/// Mode ringkas: 1 baris, ikon SF Symbol + angka (paling hemat tempat)
+func renderCompact(_ items: [CompactItem]) -> NSImage {
+    let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+    let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .medium)
+    let icon: CGFloat = 13, iconGap: CGFloat = 2, gap: CGFloat = 6
+    let widths = items.map { ceil(max(textWidth($0.text, font), textWidth($0.template, font))) }
+    var total: CGFloat = 0
+    for w in widths { total += icon + iconGap + w }
+    total += gap * CGFloat(max(items.count - 1, 0))
+    let img = NSImage(size: NSSize(width: max(total, 1), height: 22), flipped: true) { _ in
+        let attr: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.black]
+        let textH = font.ascender - font.descender
+        var x: CGFloat = 0
+        for (i, it) in items.enumerated() {
+            if let sym = NSImage(systemSymbolName: it.symbol, accessibilityDescription: nil)?
+                .withSymbolConfiguration(cfg) {
+                let sz = sym.size
+                let scale = min(icon / max(sz.width, 1), icon / max(sz.height, 1), 1)
+                let w = sz.width * scale, h = sz.height * scale
+                sym.draw(in: NSRect(x: x + (icon - w) / 2, y: (22 - h) / 2, width: w, height: h))
+            }
+            x += icon + iconGap
+            (it.text as NSString).draw(at: NSPoint(x: x, y: (22 - textH) / 2), withAttributes: attr)
+            x += widths[i] + gap
+        }
+        return true
+    }
+    img.isTemplate = true
+    return img
+}
+
 // MARK: - 3. Mole CLI Runner Bridge
 
 final class MoleBridge {
@@ -664,7 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             "disk": true,
             "net": false,
             "bat": false,
-            "compact": true,
+            "compact": false,
             "interval": 2.0
         ])
 
@@ -773,8 +852,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func updateBar() {
         guard let btn = statusItem.button else { return }
-        btn.image = renderIcon()
-        btn.imagePosition = .imageLeading
+        // Tampilan indikator disamakan dengan LiteMonitor: gambar kolom tanpa ikon aplikasi
+        btn.title = ""
+        btn.imagePosition = .imageOnly
 
         let showCPU = defaults.bool(forKey: "cpu")
         let showMem = defaults.bool(forKey: "mem")
@@ -783,38 +863,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let showBat = defaults.bool(forKey: "bat")
         let compact = defaults.bool(forKey: "compact")
 
-        let freeGB = Double(disk.free) / 1_073_741_824.0
+        var cols: [Col] = []
+        var items: [CompactItem] = []
 
-        if compact {
-            var parts: [String] = []
-            if showCPU { parts.append(String(format: "%.0f%%", cpuPct)) }
-            if showMem { parts.append(String(format: "M:%.0f%%", mem.percent)) }
-            if showDisk { parts.append(String(format: "%.0fG", freeGB)) }
-            if showNet { parts.append("↓\(formatNetRate(rate.down, short: true))") }
-            if showBat, let b = bat { parts.append("\(b.percent)%") }
-            let text = parts.isEmpty ? "" : " " + parts.joined(separator: " ")
-            let font = NSFont.monospacedDigitSystemFont(ofSize: 11.5, weight: .medium)
-            btn.attributedTitle = NSAttributedString(string: text, attributes: [.font: font])
+        if showCPU {
+            let v = String(format: "%.0f%%", cpuPct)
+            cols.append(Col(top: "CPU", bottom: v, topIsLabel: true, template: "99%"))
+            items.append(CompactItem(symbol: "cpu", text: v, template: "99%"))
+        }
+        if showMem {
+            let v = String(format: "%.0f%%", mem.percent)
+            cols.append(Col(top: "RAM", bottom: v, topIsLabel: true, template: "99%"))
+            items.append(CompactItem(symbol: "memorychip", text: v, template: "99%"))
+        }
+        if showDisk {
+            // sisa ruang dalam GB desimal, sama seperti Finder
+            let v = String(format: "%.0fGB", Double(disk.free) / 1_000_000_000.0)
+            cols.append(Col(top: "SSD", bottom: v, topIsLabel: true, template: ""))
+            items.append(CompactItem(symbol: "internaldrive", text: v, template: ""))
+        }
+        if showNet {
+            let up = fmtRate(rate.up, short: true), dn = fmtRate(rate.down, short: true)
+            cols.append(Col(top: "↑" + up, bottom: "↓" + dn, topIsLabel: false, template: "↓999.9K"))
+            items.append(CompactItem(symbol: "arrow.up.arrow.down", text: "↓" + dn, template: "↓99.9K"))
+        }
+        if showBat, let b = bat {
+            let v = (b.onAC ? "⚡" : "") + "\(b.percent)%"
+            cols.append(Col(top: "BAT", bottom: v, topIsLabel: true, template: "⚡99%"))
+            items.append(CompactItem(
+                symbol: b.onAC ? "battery.100.bolt" : "battery.100",
+                text: "\(b.percent)%",
+                template: "99%"
+            ))
+        }
+
+        if cols.isEmpty {
+            // semua metrik dimatikan → tampilkan ikon kecil saja supaya popover/menu tetap bisa dibuka
+            btn.image = renderIcon()
         } else {
-            var top: [String] = []
-            var bot: [String] = []
-            if showCPU { top.append(String(format: "CPU %2.0f%%", cpuPct)) }
-            if showMem { top.append(String(format: "RAM %2.0f%%", mem.percent)) }
-            if showDisk { bot.append(String(format: "SSD %.0fG", freeGB)) }
-            if showNet { bot.append("↓\(formatNetRate(rate.down, short: true))") }
-            if showBat, let b = bat { bot.append("🔋\(b.percent)%") }
-            if top.isEmpty { top = bot; bot = [] }
-            let l1 = top.isEmpty ? "" : " " + top.joined(separator: "  ")
-            let l2 = bot.isEmpty ? "" : " " + bot.joined(separator: "  ")
-            let full = l2.isEmpty ? l1 : "\(l1)\n\(l2)"
-            let style = NSMutableParagraphStyle()
-            style.maximumLineHeight = 10
-            style.minimumLineHeight = 10
-            let font = NSFont.monospacedDigitSystemFont(ofSize: 9.0, weight: .medium)
-            btn.attributedTitle = NSAttributedString(
-                string: full,
-                attributes: [.font: font, .paragraphStyle: style, .baselineOffset: l2.isEmpty ? 0 : -3]
-            )
+            btn.image = compact ? renderCompact(items) : renderFull(cols)
         }
     }
 
