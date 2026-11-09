@@ -29,9 +29,10 @@ Seluruh engine Mole CLI beserta binary Go (`analyze-go` & `status-go`) sudah dib
 2. Ekstrak dan pindahkan **`MoleApp.app`** ke folder **`/Applications`**.
 3. Hapus atribut karantina sekali saja lalu jalankan:
    ```bash
-   xattr -cr /Applications/MoleApp.app
+   /usr/bin/xattr -cr /Applications/MoleApp.app
    open /Applications/MoleApp.app
    ```
+   Pakai path lengkap `/usr/bin/xattr`: Python/conda (mis. miniconda) bisa memasang `xattr` lain di PATH yang tidak mengenal opsi `-r`.
 
 ### Opsi B: Installer Satu File (`install-MoleApp.command`)
 Unduh **`install-MoleApp.zip`** dari halaman Releases, ekstrak, lalu jalankan:
