@@ -298,6 +298,8 @@ struct IndicatorPrefs: Equatable {
         "glyphRing": MetricKind.cpu.rawValue,
         "glyphCenter": MetricKind.net.rawValue,
         "glyphDots": MetricKind.mem.rawValue,
+        "glyphMemIcon": GlyphIcon.lanes.rawValue,
+        "glyphNetIcon": GlyphIcon.fan.rawValue,
         "glyphDiskMode": "used",
         "glyphNetDirection": NetDirection.down.rawValue,
         "glyphNetPreset": "home",
@@ -343,6 +345,8 @@ struct IndicatorPrefs: Equatable {
         if let r = kind(d.string(forKey: "glyphRing")), GlyphPrefs.ringOptions.contains(r) { g.ring = r }
         g.center = kind(d.string(forKey: "glyphCenter")).flatMap { GlyphPrefs.centerOptions.contains($0) ? $0 : nil }
         g.dots = kind(d.string(forKey: "glyphDots")).flatMap { GlyphPrefs.dotsOptions.contains($0) ? $0 : nil }
+        if let i = GlyphIcon(rawValue: d.string(forKey: "glyphMemIcon") ?? ""), GlyphPrefs.memIconOptions.contains(i) { g.memIcon = i }
+        if let i = GlyphIcon(rawValue: d.string(forKey: "glyphNetIcon") ?? ""), GlyphPrefs.netIconOptions.contains(i) { g.netIcon = i }
         g.diskShowsFree = d.string(forKey: "glyphDiskMode") == "free"
         g.netDirection = NetDirection(rawValue: d.string(forKey: "glyphNetDirection") ?? "") ?? .down
         g.netFast = d.string(forKey: "glyphNetPreset") == "fast"
@@ -373,6 +377,8 @@ struct IndicatorPrefs: Equatable {
         d.set(glyph.ring.rawValue, forKey: "glyphRing")
         d.set(glyph.center?.rawValue ?? "none", forKey: "glyphCenter")
         d.set(glyph.dots?.rawValue ?? "none", forKey: "glyphDots")
+        d.set(glyph.memIcon.rawValue, forKey: "glyphMemIcon")
+        d.set(glyph.netIcon.rawValue, forKey: "glyphNetIcon")
         d.set(glyph.diskShowsFree ? "free" : "used", forKey: "glyphDiskMode")
         d.set(glyph.netDirection.rawValue, forKey: "glyphNetDirection")
         d.set(glyph.netFast ? "fast" : "home", forKey: "glyphNetPreset")
@@ -1313,7 +1319,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         )
     }
 
-    @objc private func openInteractiveCLI() {
+    @objc func openInteractiveCLI() {
         MoleBridge.shared.openInTerminal("")
     }
 
@@ -1330,7 +1336,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         if timer?.timeInterval != prefs.interval { startTimer() }
     }
 
-    @objc private func uninstallSelf() {
+    /// Juga dipanggil tab Aplikasi di halaman Pengaturan
+    @objc func uninstallSelf() {
         let a = NSAlert()
         a.messageText = "Uninstall MoleApp?"
         a.informativeText = "MoleApp akan dihapus dari 'Buka saat login', pengaturannya dihapus, lalu MoleApp.app dipindahkan ke Tong Sampah."
