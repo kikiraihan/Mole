@@ -50,21 +50,24 @@ Aturan di `macos-app.yml`:
 | Push ke `main` yang menyentuh `macos-app/**` | Ya | Ya, otomatis `app-v<versi>` bila tag versi di `Info.plist` belum ada |
 | Push tag `app-v*` | Ya | Ya, untuk tag itu |
 | Push ke `claude/**`, pull request | Ya | Tidak |
-| **Run workflow** manual (`workflow_dispatch`) | Ya | **Tidak** (rilis otomatis hanya untuk event `push`) |
+| **Run workflow** manual (`workflow_dispatch`) di `main` | Ya | Ya, bila tag versi di `Info.plist` belum ada (sejak 2026-11-10) |
+| **Run workflow** manual di branch lain | Ya | Tidak |
 
-Push yang terjadi saat workflow mati **tidak** dijalankan ulang oleh GitHub. Untuk menyusul:
+Push yang terjadi saat workflow mati **tidak** dijalankan ulang oleh GitHub (contoh: merge 1.6.0 pada 2026-11-10). Untuk menyusul, cukup Actions → Build MoleApp → **Run workflow** di `main`:
 
-1. Cek kompilasi dulu: Actions → Build MoleApp → **Run workflow** di `main`, atau
+```bash
+gh workflow run macos-app.yml --ref main -R kikiraihan/Mole
+```
 
-   ```bash
-   gh workflow run macos-app.yml --ref main -R kikiraihan/Mole
-   ```
+Build jalan, lalu rilis `app-v<versi>` dibuat bila tag itu belum ada. Kalau versinya sudah dirilis, run ini hanya build (aman untuk sekadar mengecek kompilasi).
 
-2. Kalau hijau dan versinya belum dirilis, buat tag rilis:
+Cara lain, push tag secara manual:
 
-   ```bash
-   git fetch origin main && git tag app-v1.6.0 origin/main && git push origin app-v1.6.0
-   ```
+```bash
+git fetch origin main && git tag app-v1.6.0 origin/main && git push origin app-v1.6.0
+```
+
+Catatan: langkah smoke test (membuka app) memakai `continue-on-error`, jadi rilis tetap terbit walau app gagal berjalan di CI. Coba artefak build di Mac bila perubahannya besar.
 
 ## Sinkronisasi dengan upstream
 

@@ -113,8 +113,12 @@ struct GlyphPrefs: Equatable {
     static let dotsOptions: [MetricKind] = [.mem, .cpu, .disk]
 
     /// Ambang busur internet (byte/detik): Rumahan 10 KB/s · 1 MB/s · 10 MB/s, Cepat 100 KB/s · 10 MB/s · 100 MB/s
+    /// Literal byte ditulis langsung (bukan perkalian) supaya type-checker Swift tidak kehabisan waktu
+    private static let netHome: [Double] = [10_240, 1_048_576, 10_485_760]
+    private static let netFastPreset: [Double] = [102_400, 10_485_760, 104_857_600]
+
     var netThresholds: [Double] {
-        netFast ? [100 * 1024, 10 * 1_048_576, 100 * 1_048_576] : [10 * 1024, 1_048_576, 10 * 1_048_576]
+        netFast ? GlyphPrefs.netFastPreset : GlyphPrefs.netHome
     }
 }
 
