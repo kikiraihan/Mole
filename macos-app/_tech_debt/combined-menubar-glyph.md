@@ -22,6 +22,18 @@ Saat ini MoleApp menampilkan teks/tick per metrik (mode 2 baris/ringkas). Ini ma
 
 Keterbatasan: tinggi menu bar ~22 pt (24 pt di Mac bernotch), jadi tiap glyph realistis 14–18 pt; detail harus dari bentuk dan jumlah segmen, bukan teks kecil.
 
+## Mockup desain
+
+Contoh tampilan (render statis, belum dari kode Swift) ada di [`combined-menubar-glyph/`](combined-menubar-glyph/). Sumbernya `mockup.html`; render ulang PNG dengan `node macos-app/_tech_debt/combined-menubar-glyph/render.js`.
+
+| Gambar | Isi |
+|---|---|
+| ![Menu bar](combined-menubar-glyph/01-menubar-varian-a-b.png) | Varian A dan B di menu bar ukuran asli, mode terang/gelap, Mac bernotch |
+| ![Zoom](combined-menubar-glyph/02-zoom-anatomi.png) | Zoom 4× tiap glyph dan anatomi varian B |
+| ![Level](combined-menubar-glyph/03-tabel-level.png) | Tampilan tiap metrik di level 0/25/50/75/100% |
+| ![Interaksi](combined-menubar-glyph/04-interaksi-region-tooltip-popover.png) | GlyphRegion, tooltip saat hover, popover saat klik di RAM |
+| ![Kritis](combined-menubar-glyph/05-kondisi-kritis.png) | Baterai rendah, disk hampir penuh, mengisi daya, peringatan di varian B |
+
 ## Pemetaan metrik ke glyph
 
 | Metrik | Glyph | Cara membaca level |

@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Mockup Ikon Gabungan Menu Bar</title>
+<!--
+  Mockup statis untuk konsep di ../combined-menubar-glyph.md.
+  Semua glyph digambar dengan SVG di bawah (bukan ikon Apple asli), mengikuti
+  ukuran menu bar ~24 pt. Render ulang PNG dengan:
+    node macos-app/_tech_debt/combined-menubar-glyph/render.js
+-->
+<style>
+  :root { --bg:#f2f2f4; --card:#fff; --ink:#1d1d1f; --muted:#6e6e73; --line:#d9d9de; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:13px/1.45 -apple-system, "SF Pro Text", "Helvetica Neue", Arial, sans-serif; }
+  section { width:880px; padding:28px; background:var(--bg); }
+  h2 { margin:0 0 4px; font-size:17px; }
+  p.sub { margin:0 0 18px; color:var(--muted); }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:18px; margin-bottom:16px; }
+  .label { font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--muted); margin-bottom:8px; }
+
+  /* menu bar mock */
+  .desk { border-radius:10px; overflow:hidden; position:relative; height:150px; }
+  .desk.light { background:linear-gradient(135deg,#c9d8ef,#e9d6e8 55%,#f3e2cf); }
+  .desk.dark  { background:linear-gradient(135deg,#1c2541,#3a2a4f 55%,#4a3326); }
+  .bar { height:24px; display:flex; align-items:center; padding:0 10px; gap:14px; font-size:13px; font-weight:500; }
+  .light .bar { background:rgba(255,255,255,.55); color:#111; backdrop-filter:blur(20px); }
+  .dark .bar  { background:rgba(20,20,24,.55); color:#f5f5f7; }
+  .bar .menus { display:flex; gap:16px; }
+  .bar .spacer { flex:1; }
+  .bar .notch { width:190px; height:24px; background:#000; border-radius:0 0 10px 10px; }
+  .bar svg { display:block; }
+  .mole { display:flex; align-items:center; gap:7px; padding:0 6px; height:22px; border-radius:5px; }
+  .mole.hl { background:rgba(127,127,127,.22); }
+  .sys { display:flex; align-items:center; gap:14px; }
+  .clock { white-space:nowrap; }
+
+  .zoom { display:flex; align-items:center; justify-content:center; gap:28px; padding:22px; border-radius:10px; }
+  .zoom.light { background:#ececef; color:#111; }
+  .zoom.dark  { background:#2a2a2e; color:#f5f5f7; }
+  .zoom .cap { font-size:11px; text-align:center; margin-top:6px; opacity:.7; }
+
+  table.levels { border-collapse:collapse; width:100%; }
+  table.levels th, table.levels td { padding:8px 6px; text-align:center; border-bottom:1px solid var(--line); }
+  table.levels th { font-size:11px; color:var(--muted); font-weight:600; }
+  table.levels td.name { text-align:left; font-weight:600; width:120px; }
+  table.levels tr.dark td { background:#1e1e22; color:#f5f5f7; }
+  table.levels tr.dark td.name { color:#f5f5f7; }
+
+  .grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
+  .stack { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+  .desk { min-width:0; }
+  .tip { position:absolute; background:rgba(250,250,250,.97); color:#111; border:1px solid #cfcfd4;
+         border-radius:6px; padding:3px 8px; font-size:12px; box-shadow:0 4px 14px rgba(0,0,0,.18); white-space:nowrap; }
+  .pop { position:absolute; width:250px; background:rgba(250,250,252,.96); border:1px solid #cfcfd4; border-radius:12px;
+         box-shadow:0 12px 32px rgba(0,0,0,.25); padding:10px; font-size:12px; color:#111; }
+  .pop .row { display:flex; justify-content:space-between; padding:6px 8px; border-radius:7px; }
+  .pop .row.on { background:#0a84ff; color:#fff; }
+  .pop .meter { height:5px; background:#e3e3e8; border-radius:3px; margin:2px 8px 8px; overflow:hidden; }
+  .pop .meter i { display:block; height:100%; background:#0a84ff; }
+  .regions { position:relative; display:inline-flex; gap:0; }
+  .regions .r { border:1.5px dashed #ff375f; padding:6px; margin-right:-1.5px; position:relative; }
+  .regions .r span { position:absolute; bottom:-18px; left:50%; transform:translateX(-50%); font-size:10px; color:#ff375f; white-space:nowrap; }
+  .note { font-size:12px; color:var(--muted); margin-top:10px; }
+</style>
+</head>
+<body>
+
+<section id="s1">
+  <h2>1 · Menu bar: varian A (cluster baris) dan B (ikon tunggal)</h2>
+  <p class="sub">Ukuran asli menu bar (tinggi 24 pt). Glyph Mole disorot; ikon lain di kanan hanya placeholder sistem.</p>
+  <div class="card">
+    <div class="label">Varian A · Cluster baris · ±80 pt · mode terang</div>
+    <div class="desk light"><div class="bar" data-variant="A"></div></div>
+  </div>
+  <div class="card">
+    <div class="label">Varian A · mode gelap · Mac bernotch</div>
+    <div class="desk dark"><div class="bar" data-variant="A" data-notch="1"></div></div>
+  </div>
+  <div class="card">
+    <div class="label">Varian B · Ikon tunggal · ±22 pt · terang dan gelap (bernotch)</div>
+    <div class="desk light" style="height:70px;margin-bottom:10px"><div class="bar" data-variant="B"></div></div>
+    <div class="desk dark" style="height:70px"><div class="bar" data-variant="B" data-notch="1"></div></div>
+  </div>
+</section>
+
+<section id="s2">
+  <h2>2 · Zoom 4× dan anatomi glyph</h2>
+  <p class="sub">Contoh nilai: CPU 65%, RAM 3/4 batang, Internet 2/3 busur, Baterai 72%, Storage 58% terpakai.</p>
+  <div class="card">
+    <div class="label">Varian A</div>
+    <div class="stack">
+      <div class="zoom light" id="zoomA-light"></div>
+      <div class="zoom dark" id="zoomA-dark"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="label">Varian B · cincin = CPU, pusat = Internet, titik = RAM</div>
+    <div class="grid2">
+      <div class="zoom light" id="zoomB-light"></div>
+      <div class="zoom dark" id="zoomB-dark"></div>
+    </div>
+  </div>
+</section>
+
+<section id="s3">
+  <h2>3 · Tabel level (dibaca dari bentuk, bukan angka)</h2>
+  <p class="sub">Ukuran 2× agar jelas. Baris gelap = mode gelap (template image otomatis jadi putih).</p>
+  <div class="card"><table class="levels" id="levels"></table></div>
+</section>
+
+<section id="s4">
+  <h2>4 · Interaksi per bagian</h2>
+  <p class="sub">Area klik dihitung dari rentang x tiap glyph (GlyphRegion). Hover memunculkan tooltip angka tepat; klik membuka popover langsung di bagian itu.</p>
+  <div class="card">
+    <div class="label">GlyphRegion (zoom 3×)</div>
+    <div style="padding:10px 0 26px;display:flex;justify-content:center"><div class="regions" id="regions"></div></div>
+  </div>
+  <div class="stack">
+    <div class="card">
+      <div class="label">Hover di RAM → tooltip</div>
+      <div class="desk light" style="height:90px" id="hoverDesk"><div class="bar" data-variant="A" data-hl="1" data-short="1"></div></div>
+    </div>
+    <div class="card">
+      <div class="label">Klik di RAM → popover bagian RAM</div>
+      <div class="desk light" style="height:240px" id="clickDesk"><div class="bar" data-variant="A" data-hl="1" data-short="1"></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="s5">
+  <h2>5 · Kondisi kritis (warna hanya pada bagian terkait)</h2>
+  <p class="sub">Glyph lain tetap template monokrom; hanya bagian kritis yang diwarnai, seperti indikator baterai bawaan.</p>
+  <div class="grid2">
+    <div class="card">
+      <div class="label">Baterai &lt; 20% · merah</div>
+      <div class="zoom light" id="crit1"></div>
+    </div>
+    <div class="card">
+      <div class="label">Disk sisa &lt; 10% · tepi tebal + oranye</div>
+      <div class="zoom light" id="crit2"></div>
+    </div>
+    <div class="card">
+      <div class="label">Sedang mengisi daya · petir</div>
+      <div class="zoom dark" id="crit3"></div>
+    </div>
+    <div class="card">
+      <div class="label">Varian B · disk hampir penuh · titik oranye</div>
+      <div class="zoom dark" id="crit4"></div>
+    </div>
+  </div>
+</section>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const DIM = 0.28;  // opacity bagian kosong (seperti batang sinyal yang tidak aktif)
+
+function svg(w, h, scale, inner) {
+  return `<svg width="${w*scale}" height="${h*scale}" viewBox="0 0 ${w} ${h}" fill="none">${inner}</svg>`;
+}
+
+// Prosesor: cincin, panjang arc = % CPU
+function cpu(pct, s=1, color='currentColor') {
+  const r = 6, c = 2*Math.PI*r, len = c*pct/100;
+  return svg(16,16,s,
+    `<circle cx="8" cy="8" r="${r}" stroke="currentColor" stroke-opacity="${DIM}" stroke-width="2.2"/>
+     <circle cx="8" cy="8" r="${r}" stroke="${color}" stroke-width="2.2" stroke-linecap="round" ${pct>0?'':'stroke-opacity="0"'}
+       stroke-dasharray="${len} ${c}" transform="rotate(-90 8 8)"/>
+     <rect x="5.6" y="5.6" width="4.8" height="4.8" rx="1" fill="currentColor"/>`);
+}
+
+// RAM: 4 batang seperti sinyal seluler
+function ram(n, s=1) {
+  let out = '';
+  [4,7,10,13].forEach((h,i)=>{
+    out += `<rect x="${1+i*3.6}" y="${15-h}" width="2.6" height="${h}" rx="0.8" fill="currentColor" ${i<n?'':`fill-opacity="${DIM}"`}/>`;
+  });
+  return svg(16,16,s,out);
+}
+
+// Internet: kipas 3 busur
+function net(n, s=1, scaleBox=1) {
+  const arcs = [[3.2,1],[6.4,2],[9.6,3]];
+  let out = `<circle cx="9" cy="14" r="1.6" fill="currentColor" ${n>0?'':`fill-opacity="${DIM}"`}/>`;
+  arcs.forEach(([r,idx])=>{
+    const a = Math.PI/4.2;
+    const x1 = 9 - r*Math.sin(a), y1 = 14 - r*Math.cos(a);
+    const x2 = 9 + r*Math.sin(a);
+    out += `<path d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${r} ${r} 0 0 1 ${x2.toFixed(2)} ${y1.toFixed(2)}"
+      stroke="currentColor" stroke-width="2" stroke-linecap="round" ${idx<=n?'':`stroke-opacity="${DIM}"`}/>`;
+  });
+  return svg(18,16,s,out);
+}
+
+// Baterai: isian = %
+function battery(pct, s=1, opts={}) {
+  const fillW = 18*pct/100;
+  const col = opts.color || 'currentColor';
+  let bolt = opts.charging
+    ? `<path d="M13.4 2.2 L9.4 8.6 H12.4 L10.8 13.8 L15.2 7 H12.2 Z" fill="currentColor" stroke="${opts.boltStroke||'#000'}" stroke-width="0.9" stroke-linejoin="round"/>`
+    : '';
+  return svg(27,16,s,
+    `<rect x="1" y="3" width="22" height="10" rx="3" stroke="currentColor" stroke-opacity="0.45" stroke-width="1.2"/>
+     <path d="M24.4 6.4 v3.2 a1.6 1.6 0 0 0 0 -3.2z" fill="currentColor" fill-opacity="0.45"/>
+     <rect x="3" y="5" width="${fillW.toFixed(2)}" height="6" rx="1.5" fill="${col}"/>${bolt}`);
+}
+
+// Storage: silinder dengan isian dari bawah
+function disk(pct, s=1, opts={}) {
+  const id = 'dk'+Math.random().toString(36).slice(2,8);
+  const top = 5, bottom = 14, h = (bottom-top)*pct/100;
+  const sw = opts.thick ? 2 : 1.2;
+  const col = opts.color || 'currentColor';
+  return svg(14,16,s,
+    `<defs><clipPath id="${id}"><path d="M2 3.5 Q7 1 12 3.5 V12.5 Q7 15 2 12.5 Z"/></clipPath></defs>
+     <rect x="0" y="${(bottom-h).toFixed(2)}" width="14" height="${(h+1).toFixed(2)}" fill="${col}" ${opts.color?'':'fill-opacity="0.85"'} clip-path="url(#${id})"/>
+     <path d="M2 3.5 Q7 1 12 3.5 V12.5 Q7 15 2 12.5 Z" stroke="${opts.thick?col:'currentColor'}" stroke-width="${sw}" stroke-linejoin="round"/>
+     <path d="M2 3.5 Q7 6 12 3.5" stroke="${opts.thick?col:'currentColor'}" stroke-width="${sw*0.8}"/>`);
+}
+
+// Varian B: cincin CPU + busur internet di tengah + 5 titik RAM di bawah
+function combo(m, s=1, opts={}) {
+  const r = 7.6, c = 2*Math.PI*r, len = c*m.cpu/100;
+  const cx = 11, cy = 9;
+  let arcs = '';
+  [[2.4,1],[4.6,2]].forEach(([rr,idx])=>{
+    const a = Math.PI/4.2, x1 = cx-rr*Math.sin(a), y1 = cy+2.6-rr*Math.cos(a), x2 = cx+rr*Math.sin(a);
+    arcs += `<path d="M${x1.toFixed(2)} ${y1.toFixed(2)} A${rr} ${rr} 0 0 1 ${x2.toFixed(2)} ${y1.toFixed(2)}"
+      stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ${idx<=m.net?'':`stroke-opacity="${DIM}"`}/>`;
+  });
+  arcs += `<circle cx="${cx}" cy="${cy+2.6}" r="1.1" fill="currentColor"/>`;
+  let dots = '';
+  for (let i=0;i<5;i++) {
+    const on = i < m.ramDots;
+    const col = (opts.diskWarn && i===4) ? '#ff9f0a' : 'currentColor';
+    dots += `<circle cx="${3+i*4}" cy="20.6" r="1.25" fill="${col}" ${(on||opts.diskWarn&&i===4)?'':`fill-opacity="${DIM}"`}/>`;
+  }
+  return svg(22,22,s,
+    `<circle cx="${cx}" cy="${cy}" r="${r}" stroke="currentColor" stroke-opacity="${DIM}" stroke-width="1.8"/>
+     <circle cx="${cx}" cy="${cy}" r="${r}" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" ${m.cpu>0?'':'stroke-opacity="0"'}
+       stroke-dasharray="${len} ${c}" transform="rotate(-90 ${cx} ${cy})"/>${arcs}${dots}`);
+}
+
+const M = { cpu:65, ram:3, net:2, bat:72, disk:58, ramDots:4 };
+
+function clusterA(s=1) {
+  return `${ram(M.ram,s)}${net(M.net,s)}${battery(M.bat,s)}${disk(M.disk,s)}${cpu(M.cpu,s)}`;
+}
+
+// ---- menu bar ----
+const sysIcons = `<span class="sys">
+  <svg width="16" height="14" viewBox="0 0 16 14"><rect x="1" y="2" width="14" height="3" rx="1.5" fill="currentColor"/><rect x="1" y="9" width="14" height="3" rx="1.5" fill="currentColor"/><circle cx="5" cy="3.5" r="2.4" fill="currentColor"/><circle cx="11" cy="10.5" r="2.4" fill="currentColor"/></svg>
+  <svg width="14" height="14" viewBox="0 0 14 14"><circle cx="6" cy="6" r="4.2" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M9 9 L13 13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+  <span class="clock">Sel 10 Nov  09.41</span></span>`;
+
+document.querySelectorAll('.bar').forEach(bar=>{
+  const v = bar.dataset.variant;
+  const glyph = v==='A' ? clusterA(1) : combo(M,1);
+  const left = bar.dataset.short ? `<span class="menus"><b>Finder</b></span>`
+    : `<span class="menus"><b>Finder</b><span>File</span><span>Edit</span><span>View</span><span>Go</span><span>Window</span></span>`;
+  bar.innerHTML = `${left}<span class="spacer"></span>${bar.dataset.notch?'<span class="notch"></span><span class="spacer"></span>':''}
+    <span class="mole hl" title="Mole">${glyph}</span>${sysIcons}`;
+});
+
+// ---- zoom ----
+function zoomA(el){
+  const s=4;
+  el.innerHTML = [['RAM',ram(M.ram,s)],['Internet',net(M.net,s)],['Baterai',battery(M.bat,s)],['Storage',disk(M.disk,s)],['CPU',cpu(M.cpu,s)]]
+    .map(([n,g])=>`<div>${g}<div class="cap">${n}</div></div>`).join('');
+}
+function zoomB(el){
+  el.innerHTML = `<div>${combo(M,6)}<div class="cap">CPU 65% · Net 2/3 · RAM 4/5</div></div>`;
+}
+zoomA(document.getElementById('zoomA-light')); zoomA(document.getElementById('zoomA-dark'));
+zoomB(document.getElementById('zoomB-light')); zoomB(document.getElementById('zoomB-dark'));
+
+// ---- levels ----
+const lv = [0,25,50,75,100];
+const rows = [
+  ['Prosesor', p=>cpu(p,2)],
+  ['RAM', p=>ram(Math.round(p/25),2)],
+  ['Storage', p=>disk(p,2)],
+  ['Baterai', p=>battery(p,2)],
+  ['Internet', p=>net([0,1,2,2,3][lv.indexOf(p)],2)],
+  ['Varian B', p=>combo({cpu:p,net:[0,1,1,2,2][lv.indexOf(p)],ramDots:Math.round(p/20)},2)],
+];
+let html = `<tr><th></th>${lv.map(p=>`<th>${p}%</th>`).join('')}</tr>`;
+rows.forEach(([n,f])=>{ html += `<tr><td class="name">${n}</td>${lv.map(p=>`<td>${f(p)}</td>`).join('')}</tr>`; });
+html += `<tr class="dark"><td class="name">Varian A (gelap)</td>${lv.map(p=>`<td style="white-space:nowrap">${ram(Math.round(p/25))}${net([0,1,2,2,3][lv.indexOf(p)])}${cpu(p)}</td>`).join('')}</tr>`;
+html += `<tr><td class="name" style="font-weight:400;color:#6e6e73;font-size:11px">Internet</td>${['idle','≥10 KB/s','≥1 MB/s','≥1 MB/s','≥10 MB/s'].map(t=>`<td style="font-size:11px;color:#6e6e73">${t}</td>`).join('')}</tr>`;
+document.getElementById('levels').innerHTML = html;
+
+// ---- regions ----
+document.getElementById('regions').innerHTML =
+  [['RAM',ram(M.ram,3)],['Internet',net(M.net,3)],['Baterai',battery(M.bat,3)],['Storage',disk(M.disk,3)],['CPU',cpu(M.cpu,3)]]
+  .map(([n,g])=>`<div class="r">${g}<span>${n}</span></div>`).join('');
+
+// tooltip & popover positions relative to the Mole item
+function anchor(desk){
+  const mole = desk.querySelector('.mole'), r = mole.getBoundingClientRect(), d = desk.getBoundingClientRect();
+  const first = mole.querySelector('svg').getBoundingClientRect();
+  return { left: first.left - d.left, center: first.left - d.left + first.width/2, moleLeft:r.left-d.left };
+}
+const hd = document.getElementById('hoverDesk'), ha = anchor(hd);
+hd.insertAdjacentHTML('beforeend',
+  `<svg style="position:absolute;left:${ha.center-2}px;top:13px" width="14" height="20" viewBox="0 0 14 20"><path d="M1 1 V15 L4.6 11.6 L7 17 L9.2 16 L6.8 10.8 H11.6 Z" fill="#111" stroke="#fff" stroke-width="1.2"/></svg>
+   <div class="tip" style="left:${ha.center-30}px;top:40px">RAM 6,7 / 8,0 GB · 84%</div>`);
+const cd = document.getElementById('clickDesk'), ca = anchor(cd);
+cd.insertAdjacentHTML('beforeend',
+  `<div class="pop" style="left:${Math.max(8,ca.moleLeft-150)}px;top:30px">
+     <div class="row"><span>Prosesor</span><b>65%</b></div><div class="meter"><i style="width:65%"></i></div>
+     <div class="row on"><span>RAM</span><b>6,7 / 8,0 GB</b></div><div class="meter"><i style="width:84%"></i></div>
+     <div class="row"><span>Internet</span><b>↓ 2,4 MB/s  ↑ 120 KB/s</b></div>
+     <div class="row"><span>Baterai</span><b>72%</b></div>
+     <div class="row"><span>Storage</span><b>290 / 500 GB</b></div>
+   </div>`);
+
+// ---- critical ----
+const RED='#ff3b30', ORG='#ff9f0a';
+document.getElementById('crit1').innerHTML = `${ram(M.ram,4)}${net(M.net,4)}${battery(14,4,{color:RED})}`;
+document.getElementById('crit2').innerHTML = `${ram(M.ram,4)}${disk(93,4,{thick:true,color:ORG})}${cpu(M.cpu,4)}`;
+document.getElementById('crit3').innerHTML = `${battery(46,5,{charging:true,boltStroke:'#2a2a2e'})}`;
+document.getElementById('crit4').innerHTML = `${combo(M,6,{diskWarn:true})}`;
+</script>
+</body>
+</html>
