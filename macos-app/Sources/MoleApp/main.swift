@@ -301,6 +301,10 @@ struct IndicatorPrefs: Equatable {
         "glyphMemIcon": GlyphIcon.lanes.rawValue,
         "glyphNetIcon": GlyphIcon.fan.rawValue,
         "glyphRowLayout": GlyphLayout.single.rawValue,
+        "glyphCPUIcon": GlyphIcon.ring.rawValue,
+        "glyphBatIcon": GlyphIcon.batH.rawValue,
+        "glyphCPUMode": "percent",
+        "glyphMemMode": "percent",
         "glyphDiskMode": "used",
         "glyphNetDirection": NetDirection.down.rawValue,
         "glyphNetPreset": "home",
@@ -349,6 +353,10 @@ struct IndicatorPrefs: Equatable {
         if let i = GlyphIcon(rawValue: d.string(forKey: "glyphMemIcon") ?? ""), GlyphPrefs.memIconOptions.contains(i) { g.memIcon = i }
         if let i = GlyphIcon(rawValue: d.string(forKey: "glyphNetIcon") ?? ""), GlyphPrefs.netIconOptions.contains(i) { g.netIcon = i }
         g.rowLayout = GlyphLayout(rawValue: d.string(forKey: "glyphRowLayout") ?? "") ?? .single
+        if let i = GlyphIcon(rawValue: d.string(forKey: "glyphCPUIcon") ?? ""), GlyphPrefs.cpuIconOptions.contains(i) { g.cpuIcon = i }
+        if let i = GlyphIcon(rawValue: d.string(forKey: "glyphBatIcon") ?? ""), GlyphPrefs.batIconOptions.contains(i) { g.batIcon = i }
+        g.cpuShowsNumber = d.string(forKey: "glyphCPUMode") == "number"
+        g.memShowsNumber = d.string(forKey: "glyphMemMode") == "number"
         g.diskShowsFree = d.string(forKey: "glyphDiskMode") == "free"
         g.netDirection = NetDirection(rawValue: d.string(forKey: "glyphNetDirection") ?? "") ?? .down
         g.netFast = d.string(forKey: "glyphNetPreset") == "fast"
@@ -382,6 +390,10 @@ struct IndicatorPrefs: Equatable {
         d.set(glyph.memIcon.rawValue, forKey: "glyphMemIcon")
         d.set(glyph.netIcon.rawValue, forKey: "glyphNetIcon")
         d.set(glyph.rowLayout.rawValue, forKey: "glyphRowLayout")
+        d.set(glyph.cpuIcon.rawValue, forKey: "glyphCPUIcon")
+        d.set(glyph.batIcon.rawValue, forKey: "glyphBatIcon")
+        d.set(glyph.cpuShowsNumber ? "number" : "percent", forKey: "glyphCPUMode")
+        d.set(glyph.memShowsNumber ? "number" : "percent", forKey: "glyphMemMode")
         d.set(glyph.diskShowsFree ? "free" : "used", forKey: "glyphDiskMode")
         d.set(glyph.netDirection.rawValue, forKey: "glyphNetDirection")
         d.set(glyph.netFast ? "fast" : "home", forKey: "glyphNetPreset")
@@ -910,9 +922,15 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
         if let tab, let feature = Feature(rawValue: tab) {
             model.selection = feature
         }
+        let wasAccessory = NSApp.activationPolicy() != .regular
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        // Pindah dari .accessory ke .regular: menu bar aplikasi kadang baru muncul/bisa diklik setelah
+        // aktivasi berikutnya, jadi aktifkan sekali lagi setelah run loop berputar
+        if wasAccessory {
+            DispatchQueue.main.async { NSApp.activate(ignoringOtherApps: true) }
+        }
         onShow?()
     }
 
@@ -1019,6 +1037,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         }
         menu.delegate = self
         buildMenu()
+        // Menu bar aplikasi (di samping logo Apple) yang tampil saat dashboard terbuka
+        buildMainMenu()
 
         // Perubahan dari tab Pengaturan Indikator di dashboard
         NotificationCenter.default.addObserver(
@@ -1287,6 +1307,87 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         } else {
             batRow.isHidden = true
         }
+    }
+
+    /// Menu bar aplikasi saat dashboard terbuka (activation policy .regular). ⌘Q hanya menutup jendela
+    /// dashboard supaya indikator menu bar tetap jalan; keluar sepenuhnya memakai ⌥⌘Q.
+    /// Saat dashboard tertutup aplikasi kembali .accessory, jadi menu ini tidak terlihat.
+    private func buildMainMenu() {
+        let main = NSMenu()
+
+        // Menu aplikasi
+        let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Tentang MoleApp", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        let settings = NSMenuItem(title: "Pengaturan…", action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
+        appMenu.addItem(.separator())
+        appMenu.addItem(NSMenuItem(title: "Sembunyikan MoleApp", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"))
+        let hideOthers = NSMenuItem(title: "Sembunyikan Lainnya", action: #selector(NSApplication.hideOtherApplications(_:)), keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(hideOthers)
+        appMenu.addItem(NSMenuItem(title: "Tampilkan Semua", action: #selector(NSApplication.unhideAllApplications(_:)), keyEquivalent: ""))
+        appMenu.addItem(.separator())
+        let closeDash = NSMenuItem(title: "Tutup Dashboard", action: #selector(closeDashboard), keyEquivalent: "q")
+        closeDash.target = self
+        appMenu.addItem(closeDash)
+        let quitAll = NSMenuItem(title: "Keluar dari MoleApp (indikator juga)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quitAll.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(quitAll)
+        let appItem = NSMenuItem(title: "MoleApp", action: nil, keyEquivalent: "")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        // Menu Edit: supaya ⌘C/⌘V/⌘A/⌘Z berfungsi di kolom teks dashboard (pencarian, whitelist)
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(NSMenuItem(title: "Urungkan", action: Selector(("undo:")), keyEquivalent: "z"))
+        let redo = NSMenuItem(title: "Ulangi", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(NSMenuItem(title: "Potong", action: #selector(NSText.cut(_:)), keyEquivalent: "x"))
+        edit.addItem(NSMenuItem(title: "Salin", action: #selector(NSText.copy(_:)), keyEquivalent: "c"))
+        edit.addItem(NSMenuItem(title: "Tempel", action: #selector(NSText.paste(_:)), keyEquivalent: "v"))
+        edit.addItem(NSMenuItem(title: "Pilih Semua", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a"))
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        editItem.submenu = edit
+        main.addItem(editItem)
+
+        // Menu Fitur: lompat ke halaman dashboard (⌘1…⌘9, ⌘0 = Pengaturan seperti menu klik kanan)
+        let featureMenu = NSMenu(title: "Fitur")
+        for f in Feature.allCases {
+            let key = f == .settings ? "0" : (f.rawValue < 9 ? String(f.rawValue + 1) : "")
+            let item = NSMenuItem(title: f.title, action: #selector(openDashboardTab(_:)), keyEquivalent: key)
+            item.target = self
+            item.tag = f.rawValue
+            featureMenu.addItem(item)
+        }
+        featureMenu.addItem(.separator())
+        let tui = NSMenuItem(title: "Menu Interaktif mo di Terminal…", action: #selector(openInteractiveCLI), keyEquivalent: "t")
+        tui.target = self
+        featureMenu.addItem(tui)
+        let featureItem = NSMenuItem(title: "Fitur", action: nil, keyEquivalent: "")
+        featureItem.submenu = featureMenu
+        main.addItem(featureItem)
+
+        // Menu Jendela
+        let win = NSMenu(title: "Jendela")
+        win.addItem(NSMenuItem(title: "Minimalkan", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m"))
+        win.addItem(NSMenuItem(title: "Perbesar", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: ""))
+        win.addItem(NSMenuItem(title: "Tutup Jendela", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w"))
+        let winItem = NSMenuItem(title: "Jendela", action: nil, keyEquivalent: "")
+        winItem.submenu = win
+        main.addItem(winItem)
+        NSApp.windowsMenu = win
+
+        NSApp.mainMenu = main
+    }
+
+    /// ⌘Q di menu aplikasi: tutup jendela dashboard saja (windowWillClose mengembalikan ke .accessory)
+    @objc private func closeDashboard() {
+        guard dashboardLoaded else { return }
+        dashboard.window.performClose(nil)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
