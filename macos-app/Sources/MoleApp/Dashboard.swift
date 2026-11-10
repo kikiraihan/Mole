@@ -1676,6 +1676,8 @@ struct HistoryView: View {
 // membuka halaman ini), dibagi per tab: Indikator, Glyph, Interaksi, Umum.
 // Sejak 1.7.0 tab diringkas menjadi Indikator, Glyph (termasuk Interaksi), dan Aplikasi (login, pembaruan,
 // Terminal, uninstall, keluar), dengan tata letak Form bergrup yang lebih ringkas.
+// Sejak 1.8.0 tab Indikator dan Glyph digabung menjadi satu tab Indikator; bagian glyph hanya tampil
+// saat gaya glyph dipilih (bagian A untuk glyph baris, bagian B untuk glyph tunggal).
 
 /// Sumber tunggal pengaturan untuk halaman Pengaturan: setiap perubahan disimpan ke UserDefaults
 /// lalu dikabarkan ke AppDelegate.
@@ -1706,12 +1708,13 @@ final class IndicatorSettingsStore: ObservableObject {
 enum SettingsTab: String, CaseIterable, Identifiable {
     // 1.7.0: tab Interaksi digabung ke Glyph, tab Umum menjadi Aplikasi (login, pembaruan, Terminal,
     // uninstall, keluar: semua isi menu klik kanan yang belum ada di sidebar)
-    case indicator, glyph, app
+    // 1.8.0: tab Glyph digabung ke Indikator. Nilai lama "glyph" di UserDefaults tidak dikenali lagi,
+    // jadi @AppStorage kembali ke bawaan (.indicator).
+    case indicator, app
     var id: String { rawValue }
     var title: String {
         switch self {
         case .indicator: return "Indikator"
-        case .glyph: return "Glyph"
         case .app: return "Aplikasi"
         }
     }
@@ -1752,8 +1755,9 @@ struct IndicatorSettingsView: View {
             Divider()
             Form {
                 switch tab {
-                case .indicator: indicatorTab
-                case .glyph: glyphTab
+                case .indicator:
+                    indicatorTab
+                    glyphTab
                 case .app: appTab
                 }
             }
@@ -1827,7 +1831,7 @@ struct IndicatorSettingsView: View {
             Text("Metrik di menu bar & urutan")
         } footer: {
             if store.prefs.style == .glyphSingle {
-                footnote("Glyph tunggal (B) memakai isi slot di tab Glyph, bukan daftar ini.")
+                footnote("Glyph tunggal (B) memakai isi slot di bagian Glyph tunggal (B) di bawah, bukan daftar ini.")
             } else if store.prefs.bat && live.battery == nil {
                 footnote("Baterai internal tidak terdeteksi, jadi metrik ini tidak tampil di Mac ini.")
             }
@@ -1861,6 +1865,7 @@ struct IndicatorSettingsView: View {
     }
 
     // MARK: Tab Glyph (termasuk Interaksi sejak 1.7.0)
+    // Sejak 1.8.0 bagian-bagian ini tampil di bawah tab Indikator, hanya saat gaya glyph dipilih.
 
     private func centerLabel(_ k: MetricKind) -> String {
         GlyphRenderer.centerIsNumber(k) ? "\(k.short) (angka)" : k.short
@@ -1868,39 +1873,50 @@ struct IndicatorSettingsView: View {
 
     @ViewBuilder
     private var glyphTab: some View {
-        if !store.prefs.style.isGlyph {
+        if store.prefs.style.isGlyph {
+            glyphSections
+        }
+    }
+
+    @ViewBuilder
+    private var glyphSections: some View {
+        if store.prefs.style == .glyphSingle {
             Section {
-                Note(text: "Pengaturan ini berlaku untuk gaya Glyph baris (A) dan Glyph tunggal (B). Pilih gayanya di tab Indikator.", symbol: "info.circle")
+                Picker("Cincin", selection: $store.prefs.glyph.ring) {
+                    ForEach(GlyphPrefs.ringOptions) { k in Text(k.short).tag(k) }
+                }
+                Picker("Pusat", selection: $store.prefs.glyph.center) {
+                    ForEach(GlyphPrefs.centerOptions) { k in Text(centerLabel(k)).tag(Optional(k)) }
+                    Text("Kosong").tag(MetricKind?.none)
+                }
+                Picker("Titik", selection: $store.prefs.glyph.dots) {
+                    ForEach(GlyphPrefs.dotsOptions) { k in Text(k.short).tag(Optional(k)) }
+                    Text("Kosong").tag(MetricKind?.none)
+                }
+            } header: {
+                Text("Glyph tunggal (B)")
+            } footer: {
+                footnote("Cincin = panjang busur. Pusat = busur internet, baterai mini, atau angka (CPU/RAM %, storage % atau GB sisa). Titik = 5 titik terisi.")
             }
         }
 
-        Section {
-            Picker("Cincin", selection: $store.prefs.glyph.ring) {
-                ForEach(GlyphPrefs.ringOptions) { k in Text(k.short).tag(k) }
+        if store.prefs.style == .glyphRow {
+            Section {
+                Picker("Tata letak", selection: $store.prefs.glyph.rowLayout) {
+                    ForEach(GlyphLayout.allCases) { m in Text(m.title).tag(m) }
+                }
+                .pickerStyle(.segmented)
+                Picker("Ikon RAM", selection: $store.prefs.glyph.memIcon) {
+                    ForEach(GlyphPrefs.memIconOptions) { i in Text(i.title).tag(i) }
+                }
+                Picker("Ikon Internet", selection: $store.prefs.glyph.netIcon) {
+                    ForEach(GlyphPrefs.netIconOptions) { i in Text(i.title).tag(i) }
+                }
+            } header: {
+                Text("Glyph baris (A)")
+            } footer: {
+                footnote("Dua baris (grid) memakai ikon mini dan lebarnya kira-kira separuh. Urutan metrik mengisi kolom dari atas ke bawah, lalu ke kanan.")
             }
-            Picker("Pusat", selection: $store.prefs.glyph.center) {
-                ForEach(GlyphPrefs.centerOptions) { k in Text(centerLabel(k)).tag(Optional(k)) }
-                Text("Kosong").tag(MetricKind?.none)
-            }
-            Picker("Titik", selection: $store.prefs.glyph.dots) {
-                ForEach(GlyphPrefs.dotsOptions) { k in Text(k.short).tag(Optional(k)) }
-                Text("Kosong").tag(MetricKind?.none)
-            }
-        } header: {
-            Text("Glyph tunggal (B)")
-        } footer: {
-            footnote("Cincin = panjang busur. Pusat = busur internet, baterai mini, atau angka (CPU/RAM %, storage % atau GB sisa). Titik = 5 titik terisi.")
-        }
-
-        Section {
-            Picker("Ikon RAM", selection: $store.prefs.glyph.memIcon) {
-                ForEach(GlyphPrefs.memIconOptions) { i in Text(i.title).tag(i) }
-            }
-            Picker("Ikon Internet", selection: $store.prefs.glyph.netIcon) {
-                ForEach(GlyphPrefs.netIconOptions) { i in Text(i.title).tag(i) }
-            }
-        } header: {
-            Text("Glyph baris (A)")
         }
 
         Section {

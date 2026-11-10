@@ -4,6 +4,8 @@
 // isi tiap slot bisa dipilih di Pengaturan.
 // Sejak 1.7.0: ikon RAM bawaan = garis sejajar berdempetan (batang sinyal tetap bisa dipilih, juga
 // untuk Internet), dan pusat glyph B bisa diisi CPU/RAM/Storage berupa angka kecil.
+// Sejak 1.8.0: glyph A bisa ditata 1 baris (seperti sebelumnya) atau grid 2 baris berisi ikon mini
+// (kolom diisi atas lalu bawah, mengikuti urutan metrik), jadi lebarnya kira-kira separuh.
 // Semua glyph digambar dengan Core Graphics di koordinat "unit" (sama dengan mockup SVG),
 // lalu diskalakan ke tinggi menu bar 22 pt. Tanpa warna peringatan → template image (ikut
 // terang/gelap otomatis); dengan warna peringatan → gambar biasa dengan tinta putih/hitam.
@@ -30,7 +32,7 @@ enum IndicatorStyle: String, CaseIterable, Identifiable {
         switch self {
         case .text2: return "Label di atas, nilai di bawah"
         case .compact: return "1 baris, ikon + angka"
-        case .glyphRow: return "Bentuk per metrik berjajar, ±80 pt"
+        case .glyphRow: return "Bentuk per metrik, 1 baris (±80 pt) atau grid 2 baris"
         case .glyphSingle: return "Cincin + pusat + titik, ±22 pt, aman untuk notch"
         }
     }
@@ -87,6 +89,18 @@ enum GlyphIcon: String, CaseIterable, Identifiable {
     }
 }
 
+/// Tata letak glyph baris (A): 1 baris berjajar, atau grid 2 baris berisi ikon mini
+enum GlyphLayout: String, CaseIterable, Identifiable {
+    case single, grid
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .single: return "Satu baris"
+        case .grid: return "Dua baris (grid)"
+        }
+    }
+}
+
 enum NetDirection: String, CaseIterable, Identifiable {
     case down, up, total
     var id: String { rawValue }
@@ -107,6 +121,8 @@ struct GlyphPrefs: Equatable {
     // Varian A: bentuk ikon RAM dan Internet
     var memIcon: GlyphIcon = .lanes
     var netIcon: GlyphIcon = .fan
+    // Varian A: tata letak 1 baris atau grid 2 baris (sejak 1.8.0)
+    var rowLayout: GlyphLayout = .single
     // Cara membaca metrik
     var diskShowsFree = false
     var netDirection: NetDirection = .down
@@ -309,7 +325,7 @@ enum GlyphRenderer {
     static func key(_ p: IndicatorPrefs, _ v: MetricValues, dark: Bool) -> String {
         let l = levels(p.glyph, v)
         var parts = [
-            p.style.rawValue, dark ? "d" : "l", p.glyph.memIcon.rawValue, p.glyph.netIcon.rawValue,
+            p.style.rawValue, dark ? "d" : "l", p.glyph.memIcon.rawValue, p.glyph.netIcon.rawValue, p.glyph.rowLayout.rawValue,
             "\(l.cpu)", "\(l.memBars)", "\(l.mem)", "\(l.diskFill)", "\(l.netLevel)",
             "\(l.bat ?? -1)", "\(l.charging)", "\(l.batWarn)", "\(l.diskWarn)", "\(l.cpuWarn)"
         ]
@@ -345,6 +361,9 @@ enum GlyphRenderer {
             return renderSingle(g, v, l, s: s, numFont: numFont, ink: ink, template: !colored)
         }
         guard !kinds.isEmpty else { return nil }
+        if g.rowLayout == .grid {
+            return renderGrid(g, v, l, kinds: kinds, s: s, ink: ink, template: !colored)
+        }
 
         // Tata letak baris: glyph (+ angka opsional) berjajar dengan jarak `gap`
         struct Slot { let kind: MetricKind; let x: CGFloat; let glyphW: CGFloat; let text: String?; let textW: CGFloat }
@@ -371,16 +390,7 @@ enum GlyphRenderer {
             guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
             for sl in slots {
                 Self.unit(ctx, x: sl.x, h: 16, s: s) {
-                    switch sl.kind {
-                    case .cpu: Self.drawCPU(ctx, l.cpu, ink: ink, accent: l.cpuWarn ? Self.red : ink)
-                    case .mem:
-                        if g.memIcon == .bars { Self.drawBars(ctx, l.memBars, ink: ink) } else { Self.drawRAM(ctx, l.memBars, ink: ink) }
-                    case .net:
-                        // Batang sinyal untuk internet: titik menyala = 1 batang, tiap busur = 1 batang lagi
-                        if g.netIcon == .bars { Self.drawBars(ctx, l.netLevel > 0 ? l.netLevel + 1 : 0, ink: ink) } else { Self.drawNet(ctx, l.netLevel, ink: ink) }
-                    case .bat: Self.drawBattery(ctx, l.bat ?? 0, ink: ink, fill: l.batWarn ? Self.red : ink, charging: g.bolt && l.charging)
-                    case .disk: Self.drawDisk(ctx, l.diskFill, ink: ink, warn: l.diskWarn ? Self.orange : nil)
-                    }
+                    Self.drawRowIcon(ctx, sl.kind, g, l, ink: ink)
                 }
                 if let t = sl.text {
                     Self.drawNumber(t, at: sl.x + sl.glyphW + 2, font: numFont, ink: ink)
@@ -390,6 +400,80 @@ enum GlyphRenderer {
         }
         img.isTemplate = !colored
         return IndicatorRender(image: img, regions: regions)
+    }
+
+    /// Glyph A tata letak grid: ikon mini dalam 2 baris (tinggi baris 11 pt). Kolom diisi atas lalu bawah
+    /// mengikuti urutan metrik; kolom terakhir yang hanya berisi 1 ikon diletakkan di tengah vertikal.
+    private static func renderGrid(_ g: GlyphPrefs, _ v: MetricValues, _ l: Levels, kinds: [MetricKind], s: CGFloat, ink: NSColor, template: Bool) -> IndicatorRender {
+        let rowH = barHeight / 2
+        let gs = s * 0.62                       // ikon unit 16 → ±10 pt (standar) atau ±8 pt (kecil)
+        let gap: CGFloat = g.tight ? 3 : 5
+        let font = NSFont.monospacedDigitSystemFont(ofSize: g.small ? 6.5 : 7.5, weight: .semibold)
+
+        struct Cell { let kind: MetricKind; let x: CGFloat; let cy: CGFloat; let band: CGRect; let glyphW: CGFloat; let text: String? }
+        var cells: [Cell] = []
+        var x: CGFloat = 0
+        var i = 0
+        while i < kinds.count {
+            let col = Array(kinds[i..<min(i + 2, kinds.count)])
+            // Lebar kolom = sel terlebar (ikon + angka opsional)
+            var widths: [CGFloat] = []
+            var texts: [String?] = []
+            for k in col {
+                let gw = unitWidth(k, g) * gs
+                var tw: CGFloat = 0
+                var text: String?
+                if g.numbers.contains(k) {
+                    let t = numberText(k, g, v)
+                    text = t
+                    tw = 1.5 + ceil(max(textWidth(t, font), textWidth(numberTemplate(k, g), font)))
+                }
+                widths.append(gw + tw)
+                texts.append(text)
+            }
+            let colW = widths.max() ?? 0
+            for (r, k) in col.enumerated() {
+                let single = col.count == 1
+                let cy = single ? barHeight / 2 : rowH * (CGFloat(r) + 0.5)
+                let band = single
+                    ? CGRect(x: x - gap / 2, y: 0, width: colW + gap, height: barHeight)
+                    : CGRect(x: x - gap / 2, y: rowH * CGFloat(r), width: colW + gap, height: rowH)
+                cells.append(Cell(kind: k, x: x, cy: cy, band: band, glyphW: unitWidth(k, g) * gs, text: texts[r]))
+            }
+            x += colW + gap
+            i += 2
+        }
+        let total = max(1, x - gap)
+        let regions = cells.map { GlyphRegion(kind: $0.kind, rects: [$0.band]) }
+
+        let img = NSImage(size: NSSize(width: total, height: barHeight), flipped: true) { _ in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            for c in cells {
+                Self.unit(ctx, x: c.x, top: c.cy - 8 * gs, h: 16, s: gs) {
+                    Self.drawRowIcon(ctx, c.kind, g, l, ink: ink)
+                }
+                if let t = c.text {
+                    Self.drawNumber(t, at: c.x + c.glyphW + 1.5, font: font, ink: ink, cy: c.cy)
+                }
+            }
+            return true
+        }
+        img.isTemplate = template
+        return IndicatorRender(image: img, regions: regions)
+    }
+
+    /// Ikon satu metrik glyph A di koordinat unit (tinggi 16); dipakai tata letak 1 baris maupun grid
+    private static func drawRowIcon(_ ctx: CGContext, _ k: MetricKind, _ g: GlyphPrefs, _ l: Levels, ink: NSColor) {
+        switch k {
+        case .cpu: drawCPU(ctx, l.cpu, ink: ink, accent: l.cpuWarn ? red : ink)
+        case .mem:
+            if g.memIcon == .bars { drawBars(ctx, l.memBars, ink: ink) } else { drawRAM(ctx, l.memBars, ink: ink) }
+        case .net:
+            // Batang sinyal untuk internet: titik menyala = 1 batang, tiap busur = 1 batang lagi
+            if g.netIcon == .bars { drawBars(ctx, l.netLevel > 0 ? l.netLevel + 1 : 0, ink: ink) } else { drawNet(ctx, l.netLevel, ink: ink) }
+        case .bat: drawBattery(ctx, l.bat ?? 0, ink: ink, fill: l.batWarn ? red : ink, charging: g.bolt && l.charging)
+        case .disk: drawDisk(ctx, l.diskFill, ink: ink, warn: l.diskWarn ? orange : nil)
+        }
     }
 
     private static func renderSingle(_ g: GlyphPrefs, _ v: MetricValues, _ l: Levels, s: CGFloat, numFont: NSFont, ink: NSColor, template: Bool) -> IndicatorRender {
@@ -464,9 +548,10 @@ enum GlyphRenderer {
         }
     }
 
-    private static func unit(_ ctx: CGContext, x: CGFloat, h: CGFloat, s: CGFloat, _ body: () -> Void) {
+    /// `top` nil = ditengah vertikal di menu bar; grid memberi `top` per baris
+    private static func unit(_ ctx: CGContext, x: CGFloat, top: CGFloat? = nil, h: CGFloat, s: CGFloat, _ body: () -> Void) {
         ctx.saveGState()
-        ctx.translateBy(x: x, y: (barHeight - h * s) / 2)
+        ctx.translateBy(x: x, y: top ?? (barHeight - h * s) / 2)
         ctx.scaleBy(x: s, y: s)
         body()
         ctx.restoreGState()
@@ -652,9 +737,10 @@ enum GlyphRenderer {
         (t as NSString).draw(at: NSPoint(x: 11 - size.width / 2, y: 9 - size.height / 2), withAttributes: attr)
     }
 
-    private static func drawNumber(_ t: String, at x: CGFloat, font: NSFont, ink: NSColor) {
+    /// `cy` = pusat vertikal teks (nil = tengah menu bar; grid memakai pusat barisnya)
+    private static func drawNumber(_ t: String, at x: CGFloat, font: NSFont, ink: NSColor, cy: CGFloat? = nil) {
         let attr: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: ink]
         let h = font.ascender - font.descender
-        (t as NSString).draw(at: NSPoint(x: x, y: (barHeight - h) / 2), withAttributes: attr)
+        (t as NSString).draw(at: NSPoint(x: x, y: (cy ?? barHeight / 2) - h / 2), withAttributes: attr)
     }
 }
