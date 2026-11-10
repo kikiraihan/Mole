@@ -2,6 +2,8 @@
 // Varian A (glyph baris): RAM = 4 batang sinyal, Internet = kipas 3 busur, Baterai = isian,
 // Storage = silinder berisi, CPU = cincin. Varian B (glyph tunggal): cincin + pusat + 5 titik,
 // isi tiap slot bisa dipilih di Pengaturan.
+// Sejak 1.7.0: ikon RAM bawaan = garis sejajar berdempetan (batang sinyal tetap bisa dipilih, juga
+// untuk Internet), dan pusat glyph B bisa diisi CPU/RAM/Storage berupa angka kecil.
 // Semua glyph digambar dengan Core Graphics di koordinat "unit" (sama dengan mockup SVG),
 // lalu diskalakan ke tinggi menu bar 22 pt. Tanpa warna peringatan → template image (ikut
 // terang/gelap otomatis); dengan warna peringatan → gambar biasa dengan tinta putih/hitam.
@@ -72,6 +74,19 @@ enum MetricKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// Bentuk ikon per metrik pada glyph baris (A). RAM dan Internet bisa memilih bentuknya.
+enum GlyphIcon: String, CaseIterable, Identifiable {
+    case lanes, bars, fan
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .lanes: return "Garis sejajar"
+        case .bars: return "Batang sinyal"
+        case .fan: return "Kipas busur"
+        }
+    }
+}
+
 enum NetDirection: String, CaseIterable, Identifiable {
     case down, up, total
     var id: String { rawValue }
@@ -89,6 +104,9 @@ struct GlyphPrefs: Equatable {
     var ring: MetricKind = .cpu
     var center: MetricKind? = .net
     var dots: MetricKind? = .mem
+    // Varian A: bentuk ikon RAM dan Internet
+    var memIcon: GlyphIcon = .lanes
+    var netIcon: GlyphIcon = .fan
     // Cara membaca metrik
     var diskShowsFree = false
     var netDirection: NetDirection = .down
@@ -109,7 +127,10 @@ struct GlyphPrefs: Equatable {
     var tooltips = true
 
     static let ringOptions: [MetricKind] = [.cpu, .mem, .disk, .bat]
-    static let centerOptions: [MetricKind] = [.net, .bat]
+    /// Internet dan baterai punya ikon mini; CPU/RAM/Storage tampil sebagai angka kecil di tengah cincin
+    static let centerOptions: [MetricKind] = [.net, .bat, .cpu, .mem, .disk]
+    static let memIconOptions: [GlyphIcon] = [.lanes, .bars]
+    static let netIconOptions: [GlyphIcon] = [.fan, .bars]
     static let dotsOptions: [MetricKind] = [.mem, .cpu, .disk]
 
     /// Ambang busur internet (byte/detik): Rumahan 10 KB/s · 1 MB/s · 10 MB/s, Cepat 100 KB/s · 10 MB/s · 100 MB/s
@@ -160,7 +181,7 @@ enum GlyphRenderer {
     /// Level terkuantisasi: hanya perubahan level yang memicu gambar ulang (hemat CPU/WindowServer)
     private struct Levels {
         var cpu: Double = 0         // 0...1, langkah 5%
-        var memBars = 0             // 0...4
+        var memBars = 0             // 0...4 (batang sinyal) atau 0...5 (garis sejajar)
         var mem: Double = 0         // 0...1, langkah 5%
         var diskFill: Double = 0    // 0...1, langkah 5% (terpakai atau sisa sesuai pengaturan)
         var netLevel = 0            // 0...3
@@ -177,7 +198,7 @@ enum GlyphRenderer {
         var l = Levels()
         l.cpu = q(v.cpu)
         l.mem = q(v.memPercent)
-        l.memBars = Int((min(100, max(0, v.memPercent)) / 25).rounded())
+        l.memBars = Int((min(100, max(0, v.memPercent)) / (p.memIcon == .lanes ? 20 : 25)).rounded())
         l.diskFill = q(p.diskShowsFree ? v.diskFreePercent : v.disk.percent)
         let rate: Double
         switch p.netDirection {
@@ -234,6 +255,22 @@ enum GlyphRenderer {
         }
     }
 
+    /// Pusat glyph B: CPU/RAM/Storage digambar sebagai angka (tanpa ikon mini)
+    static func centerIsNumber(_ k: MetricKind) -> Bool { k == .cpu || k == .mem || k == .disk }
+
+    /// Angka pusat maksimal 3 karakter supaya muat di dalam cincin (tanpa tanda %)
+    static func centerText(_ k: MetricKind, _ p: GlyphPrefs, _ v: MetricValues) -> String {
+        switch k {
+        case .cpu: return String(format: "%.0f", min(100, max(0, v.cpu)))
+        case .mem: return String(format: "%.0f", min(100, max(0, v.memPercent)))
+        case .disk:
+            guard p.diskShowsFree else { return String(format: "%.0f", min(100, max(0, v.disk.percent))) }
+            let gb = Double(v.disk.free) / 1_000_000_000.0
+            return gb >= 999.5 ? String(format: "%.0fT", gb / 1000) : String(format: "%.0f", gb)
+        default: return ""
+        }
+    }
+
     static func tooltip(_ k: MetricKind, _ v: MetricValues) -> String {
         switch k {
         case .cpu:
@@ -272,12 +309,15 @@ enum GlyphRenderer {
     static func key(_ p: IndicatorPrefs, _ v: MetricValues, dark: Bool) -> String {
         let l = levels(p.glyph, v)
         var parts = [
-            p.style.rawValue, dark ? "d" : "l",
+            p.style.rawValue, dark ? "d" : "l", p.glyph.memIcon.rawValue, p.glyph.netIcon.rawValue,
             "\(l.cpu)", "\(l.memBars)", "\(l.mem)", "\(l.diskFill)", "\(l.netLevel)",
             "\(l.bat ?? -1)", "\(l.charging)", "\(l.batWarn)", "\(l.diskWarn)", "\(l.cpuWarn)"
         ]
         for k in visibleKinds(p, v) where p.glyph.numbers.contains(k) {
             parts.append(numberText(k, p.glyph, v))
+        }
+        if p.style == .glyphSingle, let c = p.glyph.center, centerIsNumber(c) {
+            parts.append("c" + centerText(c, p.glyph, v))
         }
         return "g|" + parts.joined(separator: "|")
     }
@@ -311,7 +351,7 @@ enum GlyphRenderer {
         var slots: [Slot] = []
         var x: CGFloat = 0
         for k in kinds {
-            let gw = unitWidth(k) * s
+            let gw = unitWidth(k, g) * s
             var text: String?
             var tw: CGFloat = 0
             if g.numbers.contains(k) {
@@ -333,8 +373,11 @@ enum GlyphRenderer {
                 Self.unit(ctx, x: sl.x, h: 16, s: s) {
                     switch sl.kind {
                     case .cpu: Self.drawCPU(ctx, l.cpu, ink: ink, accent: l.cpuWarn ? Self.red : ink)
-                    case .mem: Self.drawRAM(ctx, l.memBars, ink: ink)
-                    case .net: Self.drawNet(ctx, l.netLevel, ink: ink)
+                    case .mem:
+                        if g.memIcon == .bars { Self.drawBars(ctx, l.memBars, ink: ink) } else { Self.drawRAM(ctx, l.memBars, ink: ink) }
+                    case .net:
+                        // Batang sinyal untuk internet: titik menyala = 1 batang, tiap busur = 1 batang lagi
+                        if g.netIcon == .bars { Self.drawBars(ctx, l.netLevel > 0 ? l.netLevel + 1 : 0, ink: ink) } else { Self.drawNet(ctx, l.netLevel, ink: ink) }
                     case .bat: Self.drawBattery(ctx, l.bat ?? 0, ink: ink, fill: l.batWarn ? Self.red : ink, charging: g.bolt && l.charging)
                     case .disk: Self.drawDisk(ctx, l.diskFill, ink: ink, warn: l.diskWarn ? Self.orange : nil)
                     }
@@ -367,6 +410,13 @@ enum GlyphRenderer {
         default: break
         }
         let centerKind = (g.center == .bat && v.bat == nil) ? nil : g.center
+        // Pusat berupa angka (CPU/RAM/Storage) ikut warna peringatan metriknya
+        var centerNumber: String?
+        var centerColor = ink
+        if let c = centerKind, centerIsNumber(c) {
+            centerNumber = centerText(c, g, v)
+            if c == .cpu && l.cpuWarn { centerColor = red } else if c == .disk && l.diskWarn { centerColor = orange }
+        }
         // Titik peringatan: baterai/disk kritis yang tidak sedang ditampilkan cincin atau pusat
         var warnDot: NSColor?
         if l.batWarn && g.ring != .bat && centerKind != .bat { warnDot = red }
@@ -394,6 +444,7 @@ enum GlyphRenderer {
                 Self.drawCombo(ctx, ring: Self.fraction(g.ring, l), ringColor: ringColor, center: centerKind,
                           netLevel: l.netLevel, bat: l.bat ?? 0, batColor: l.batWarn ? Self.red : ink,
                           dotsOn: dotsOn, warnDot: warnDot, ink: ink)
+                if let t = centerNumber { Self.drawCenterNumber(t, color: centerColor) }
             }
             if let t = text { Self.drawNumber(t, at: w + 2, font: numFont, ink: ink) }
             return true
@@ -404,10 +455,10 @@ enum GlyphRenderer {
 
     // MARK: Primitif gambar (koordinat unit sama dengan mockup SVG)
 
-    private static func unitWidth(_ k: MetricKind) -> CGFloat {
+    private static func unitWidth(_ k: MetricKind, _ g: GlyphPrefs) -> CGFloat {
         switch k {
         case .cpu, .mem: return 16
-        case .net: return 18
+        case .net: return g.netIcon == .bars ? 16 : 18
         case .bat: return 27
         case .disk: return 14
         }
@@ -451,7 +502,17 @@ enum GlyphRenderer {
         ctx.fillPath()
     }
 
-    private static func drawRAM(_ ctx: CGContext, _ bars: Int, ink: NSColor) {
+    /// RAM: 5 garis tegak sama tinggi yang berdempetan (seperti jalur keping memori); terisi dari kiri
+    private static func drawRAM(_ ctx: CGContext, _ lanes: Int, ink: NSColor) {
+        for i in 0..<5 {
+            ctx.setFillColor((i < lanes ? ink : ink.withAlphaComponent(dim)).cgColor)
+            ctx.addPath(CGPath(roundedRect: CGRect(x: 1 + CGFloat(i) * 2.9, y: 2.5, width: 2.1, height: 11), cornerWidth: 0.7, cornerHeight: 0.7, transform: nil))
+            ctx.fillPath()
+        }
+    }
+
+    /// 4 batang sinyal bertingkat (dulu ikon RAM); kini pilihan untuk RAM atau Internet
+    private static func drawBars(_ ctx: CGContext, _ bars: Int, ink: NSColor) {
         for (i, h) in [CGFloat(4), 7, 10, 13].enumerated() {
             ctx.setFillColor((i < bars ? ink : ink.withAlphaComponent(dim)).cgColor)
             ctx.addPath(CGPath(roundedRect: CGRect(x: 1 + CGFloat(i) * 3.6, y: 15 - h, width: 2.6, height: h), cornerWidth: 0.8, cornerHeight: 0.8, transform: nil))
@@ -581,6 +642,14 @@ enum GlyphRenderer {
             ctx.setFillColor(w.cgColor)
             ctx.fillEllipse(in: CGRect(x: 11 - 1.25, y: 20.6 - 1.25, width: 2.5, height: 2.5))
         }
+    }
+
+    /// Angka kecil di tengah cincin glyph B (koordinat unit 22×22, pusat cincin di 11,9)
+    private static func drawCenterNumber(_ t: String, color: NSColor) {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: t.count >= 3 ? 6 : 7.5, weight: .bold)
+        let attr: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: color]
+        let size = (t as NSString).size(withAttributes: attr)
+        (t as NSString).draw(at: NSPoint(x: 11 - size.width / 2, y: 9 - size.height / 2), withAttributes: attr)
     }
 
     private static func drawNumber(_ t: String, at x: CGFloat, font: NSFont, ink: NSColor) {

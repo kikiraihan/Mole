@@ -360,7 +360,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "File .dmg, .pkg, .iso, .xip, dan .zip yang tertinggal setelah instalasi."
         case .slim: return "Buang irisan Intel dari Universal App milik Anda di Apple Silicon."
         case .history: return "Apa saja yang sudah diubah Mole, plus pengaturan Touch ID, whitelist, dan completion."
-        case .settings: return "Semua pengaturan MoleApp: indikator menu bar, glyph, interaksi, dan buka saat login."
+        case .settings: return "Semua pengaturan MoleApp: indikator menu bar, glyph, interaksi, buka saat login, pembaruan, uninstall, dan keluar."
         }
     }
 }
@@ -1674,6 +1674,8 @@ struct HistoryView: View {
 // Setiap perubahan dikirim lewat .indicatorSettingsChanged supaya AppDelegate langsung menggambar ulang menu bar.
 // Sejak 1.6.0 halaman ini menjadi satu-satunya tempat pengaturan (menu klik kanan dan ikon cog di popover
 // membuka halaman ini), dibagi per tab: Indikator, Glyph, Interaksi, Umum.
+// Sejak 1.7.0 tab diringkas menjadi Indikator, Glyph (termasuk Interaksi), dan Aplikasi (login, pembaruan,
+// Terminal, uninstall, keluar), dengan tata letak Form bergrup yang lebih ringkas.
 
 /// Sumber tunggal pengaturan untuk halaman Pengaturan: setiap perubahan disimpan ke UserDefaults
 /// lalu dikabarkan ke AppDelegate.
@@ -1702,14 +1704,15 @@ final class IndicatorSettingsStore: ObservableObject {
 }
 
 enum SettingsTab: String, CaseIterable, Identifiable {
-    case indicator, glyph, interaction, general
+    // 1.7.0: tab Interaksi digabung ke Glyph, tab Umum menjadi Aplikasi (login, pembaruan, Terminal,
+    // uninstall, keluar: semua isi menu klik kanan yang belum ada di sidebar)
+    case indicator, glyph, app
     var id: String { rawValue }
     var title: String {
         switch self {
         case .indicator: return "Indikator"
         case .glyph: return "Glyph"
-        case .interaction: return "Interaksi"
-        case .general: return "Umum"
+        case .app: return "Aplikasi"
         }
     }
 }
@@ -1721,6 +1724,9 @@ struct IndicatorSettingsView: View {
     @AppStorage("settingsAdvanced") private var showAdvanced = false
     @State private var loginOn = false
     @Environment(\.colorScheme) private var scheme
+
+    /// Aksi yang sama dengan menu klik kanan (cek pembaruan, Terminal, uninstall) dijalankan AppDelegate
+    private var appDelegate: AppDelegate? { NSApp.delegate as? AppDelegate }
 
     private var loginBinding: Binding<Bool> {
         Binding(
@@ -1739,80 +1745,91 @@ struct IndicatorSettingsView: View {
         )
     }
 
+    // Tampilan ringkas: satu baris judul + tab + pratinjau live, lalu Form bergrup ala System Settings
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                PageHeader(.settings) {
-                    Button {
-                        store.resetDefaults()
-                    } label: {
-                        Label("Kembalikan bawaan", systemImage: "arrow.uturn.backward")
-                    }
-                }
-
-                Picker("", selection: $tab) {
-                    ForEach(SettingsTab.allCases) { t in
-                        Text(t.title).tag(t)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(maxWidth: 420)
-
-                if tab != .general {
-                    Panel("Pratinjau menu bar", symbol: "menubar.rectangle") {
-                        preview
-                    }
-                }
-
+        VStack(spacing: 0) {
+            header
+            Divider()
+            Form {
                 switch tab {
                 case .indicator: indicatorTab
                 case .glyph: glyphTab
-                case .interaction: interactionTab
-                case .general: generalTab
+                case .app: appTab
                 }
             }
-            .padding(24)
+            .formStyle(.grouped)
         }
         .onAppear { loginOn = SMAppService.mainApp.status == .enabled }
     }
 
-    // MARK: Tab Indikator
-
-    private var indicatorTab: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(alignment: .leading, spacing: 16) {
-                Panel("Gaya tampilan", symbol: "textformat.size") {
-                    Picker("", selection: $store.prefs.style) {
-                        ForEach(IndicatorStyle.allCases) { st in
-                            Text("\(st.title) — \(st.detail)").tag(st)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
-                }
-                Panel("Interval update", symbol: "timer") {
-                    Picker("", selection: $store.prefs.interval) {
-                        ForEach(indicatorIntervals, id: \.self) { s in
-                            Text("\(Int(s)) detik").tag(s)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    Note(text: "Interval lebih panjang lebih hemat CPU dan baterai. Disk dibaca tiap 15 update, baterai tiap 5 update.")
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: Feature.settings.symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.nose))
+            Text(Feature.settings.title).font(.rounded(17, .bold))
+            Picker("", selection: $tab) {
+                ForEach(SettingsTab.allCases) { t in
+                    Text(t.title).tag(t)
                 }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            Spacer(minLength: 8)
+            preview
+            Button {
+                store.resetDefaults()
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .help("Kembalikan pengaturan indikator ke bawaan")
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
 
-            Panel("Tampilkan di menu bar & urutan", symbol: "checklist") {
-                ForEach(Array(store.prefs.order.enumerated()), id: \.element) { i, k in
-                    metricRow(k, index: i)
+    private func footnote(_ t: String) -> some View {
+        Text(t)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    // MARK: Tab Indikator
+
+    @ViewBuilder
+    private var indicatorTab: some View {
+        Section {
+            Picker("Gaya tampilan", selection: $store.prefs.style) {
+                ForEach(IndicatorStyle.allCases) { st in
+                    Text(st.title).tag(st)
                 }
-                if store.prefs.bat && live.battery == nil {
-                    Note(text: "Baterai internal tidak terdeteksi, jadi metrik ini tidak tampil di Mac ini.", symbol: "exclamationmark.circle")
+            }
+            Picker("Interval update", selection: $store.prefs.interval) {
+                ForEach(indicatorIntervals, id: \.self) { s in
+                    Text("\(Int(s)) detik").tag(s)
                 }
-                if store.prefs.style == .glyphSingle {
-                    Note(text: "Glyph tunggal (B) memakai isi slot di tab Glyph, bukan daftar ini.")
-                }
+            }
+            .pickerStyle(.segmented)
+        } footer: {
+            footnote("\(store.prefs.style.detail). Interval lebih panjang lebih hemat CPU dan baterai; disk dibaca tiap 15 update, baterai tiap 5 update.")
+        }
+
+        Section {
+            ForEach(Array(store.prefs.order.enumerated()), id: \.element) { i, k in
+                metricRow(k, index: i)
+            }
+        } header: {
+            Text("Metrik di menu bar & urutan")
+        } footer: {
+            if store.prefs.style == .glyphSingle {
+                footnote("Glyph tunggal (B) memakai isi slot di tab Glyph, bukan daftar ini.")
+            } else if store.prefs.bat && live.battery == nil {
+                footnote("Baterai internal tidak terdeteksi, jadi metrik ini tidak tampil di Mac ini.")
             }
         }
     }
@@ -1831,6 +1848,7 @@ struct IndicatorSettingsView: View {
                 .help("Pindah ke kanan")
             Toggle("", isOn: Binding(get: { store.prefs.isOn(k) }, set: { store.prefs.set(k, $0) }))
                 .toggleStyle(.switch)
+                .controlSize(.small)
                 .labelsHidden()
         }
     }
@@ -1842,91 +1860,125 @@ struct IndicatorSettingsView: View {
         store.prefs.order = o
     }
 
-    // MARK: Tab Glyph
+    // MARK: Tab Glyph (termasuk Interaksi sejak 1.7.0)
 
+    private func centerLabel(_ k: MetricKind) -> String {
+        GlyphRenderer.centerIsNumber(k) ? "\(k.short) (angka)" : k.short
+    }
+
+    @ViewBuilder
     private var glyphTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if !store.prefs.style.isGlyph {
+        if !store.prefs.style.isGlyph {
+            Section {
                 Note(text: "Pengaturan ini berlaku untuk gaya Glyph baris (A) dan Glyph tunggal (B). Pilih gayanya di tab Indikator.", symbol: "info.circle")
             }
-            HStack(alignment: .top, spacing: 16) {
-                Panel("Glyph tunggal (B): isi slot", symbol: "circle.dotted") {
-                    Picker("Cincin", selection: $store.prefs.glyph.ring) {
-                        ForEach(GlyphPrefs.ringOptions) { k in Text(k.short).tag(k) }
-                    }
-                    Picker("Pusat", selection: $store.prefs.glyph.center) {
-                        ForEach(GlyphPrefs.centerOptions) { k in Text(k.short).tag(Optional(k)) }
-                        Text("Kosong").tag(MetricKind?.none)
-                    }
-                    Picker("Titik", selection: $store.prefs.glyph.dots) {
-                        ForEach(GlyphPrefs.dotsOptions) { k in Text(k.short).tag(Optional(k)) }
-                        Text("Kosong").tag(MetricKind?.none)
-                    }
-                    Note(text: "Cincin = panjang busur, pusat = busur internet atau baterai mini, titik = 5 titik terisi.")
+        }
+
+        Section {
+            Picker("Cincin", selection: $store.prefs.glyph.ring) {
+                ForEach(GlyphPrefs.ringOptions) { k in Text(k.short).tag(k) }
+            }
+            Picker("Pusat", selection: $store.prefs.glyph.center) {
+                ForEach(GlyphPrefs.centerOptions) { k in Text(centerLabel(k)).tag(Optional(k)) }
+                Text("Kosong").tag(MetricKind?.none)
+            }
+            Picker("Titik", selection: $store.prefs.glyph.dots) {
+                ForEach(GlyphPrefs.dotsOptions) { k in Text(k.short).tag(Optional(k)) }
+                Text("Kosong").tag(MetricKind?.none)
+            }
+        } header: {
+            Text("Glyph tunggal (B)")
+        } footer: {
+            footnote("Cincin = panjang busur. Pusat = busur internet, baterai mini, atau angka (CPU/RAM %, storage % atau GB sisa). Titik = 5 titik terisi.")
+        }
+
+        Section {
+            Picker("Ikon RAM", selection: $store.prefs.glyph.memIcon) {
+                ForEach(GlyphPrefs.memIconOptions) { i in Text(i.title).tag(i) }
+            }
+            Picker("Ikon Internet", selection: $store.prefs.glyph.netIcon) {
+                ForEach(GlyphPrefs.netIconOptions) { i in Text(i.title).tag(i) }
+            }
+        } header: {
+            Text("Glyph baris (A)")
+        }
+
+        Section {
+            Toggle("Klik per bagian membuka popover di bagian itu", isOn: $store.prefs.glyph.clickRegions)
+            Toggle("Tooltip angka tepat saat kursor di atas bagian", isOn: $store.prefs.glyph.tooltips)
+        } header: {
+            Text("Interaksi")
+        } footer: {
+            footnote("Pada gaya teks, klik kiri selalu membuka popover biasa. Klik kanan (atau Control-klik) tetap membuka menu lengkap; isinya juga ada di tab Aplikasi.")
+        }
+
+        Section {
+            Toggle("Warnai bagian yang kritis", isOn: $store.prefs.glyph.warnColors)
+            Group {
+                Stepper(value: $store.prefs.glyph.warnBattery, in: 5...50, step: 5) {
+                    Text("Baterai merah di bawah \(store.prefs.glyph.warnBattery)%")
                 }
-                Panel("Warna peringatan", symbol: "exclamationmark.triangle") {
-                    Toggle("Warnai bagian yang kritis", isOn: $store.prefs.glyph.warnColors)
-                        .toggleStyle(.switch)
-                    Note(text: "Mati = ikon murni monokrom seperti ikon sistem. Hidup = hanya bagian kritis yang diwarnai (baterai merah, disk oranye). Ambangnya ada di Lanjutan.")
+                Stepper(value: $store.prefs.glyph.warnDisk, in: 1...30, step: 1) {
+                    Text("Disk oranye bila sisa di bawah \(store.prefs.glyph.warnDisk)%")
                 }
+                Toggle("Peringatan CPU tinggi", isOn: $store.prefs.glyph.warnCPUOn)
+                Stepper(value: $store.prefs.glyph.warnCPU, in: 50...100, step: 5) {
+                    Text("CPU merah di atas \(store.prefs.glyph.warnCPU)%")
+                }
+                .disabled(!store.prefs.glyph.warnCPUOn)
+            }
+            .disabled(!store.prefs.glyph.warnColors)
+        } header: {
+            Text("Warna peringatan")
+        } footer: {
+            footnote("Mati = ikon murni monokrom seperti ikon sistem. Hidup = hanya bagian kritis yang diwarnai (baterai merah, disk oranye).")
+        }
+
+        Section {
+            Toggle("Tampilkan opsi lanjutan", isOn: $showAdvanced)
+        }
+
+        if showAdvanced {
+            Section {
+                Picker("Isian storage", selection: $store.prefs.glyph.diskShowsFree) {
+                    Text("% terpakai").tag(false)
+                    Text("% sisa").tag(true)
+                }
+                Picker("Arah internet", selection: $store.prefs.glyph.netDirection) {
+                    ForEach(NetDirection.allCases) { d in Text(d.title).tag(d) }
+                }
+                Picker("Ambang busur", selection: $store.prefs.glyph.netFast) {
+                    Text("Rumahan (10 KB/s · 1 MB/s · 10 MB/s)").tag(false)
+                    Text("Cepat (100 KB/s · 10 MB/s · 100 MB/s)").tag(true)
+                }
+                Toggle("Petir saat mengisi daya", isOn: $store.prefs.glyph.bolt)
+            } header: {
+                Text("Cara membaca metrik")
             }
 
-            DisclosureGroup(isExpanded: $showAdvanced) {
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .top, spacing: 16) {
-                        Panel("Cara membaca metrik", symbol: "ruler") {
-                            Picker("Isian storage", selection: $store.prefs.glyph.diskShowsFree) {
-                                Text("% terpakai").tag(false)
-                                Text("% sisa").tag(true)
-                            }
-                            Picker("Arah internet", selection: $store.prefs.glyph.netDirection) {
-                                ForEach(NetDirection.allCases) { d in Text(d.title).tag(d) }
-                            }
-                            Picker("Ambang busur", selection: $store.prefs.glyph.netFast) {
-                                Text("Rumahan (10 KB/s · 1 MB/s · 10 MB/s)").tag(false)
-                                Text("Cepat (100 KB/s · 10 MB/s · 100 MB/s)").tag(true)
-                            }
-                            Toggle("Petir saat mengisi daya", isOn: $store.prefs.glyph.bolt)
-                        }
-                        Panel("Angka di samping glyph", symbol: "number") {
-                            ForEach(MetricKind.allCases) { k in
-                                Toggle(k.title, isOn: numberBinding(k))
-                            }
-                            Note(text: "Pada glyph tunggal (B), angka hanya tampil untuk metrik di cincin.")
-                        }
-                    }
-                    HStack(alignment: .top, spacing: 16) {
-                        Panel("Ambang peringatan", symbol: "dial.medium") {
-                            Stepper(value: $store.prefs.glyph.warnBattery, in: 5...50, step: 5) {
-                                Text("Baterai merah di bawah \(store.prefs.glyph.warnBattery)%")
-                            }
-                            Stepper(value: $store.prefs.glyph.warnDisk, in: 1...30, step: 1) {
-                                Text("Disk oranye bila sisa di bawah \(store.prefs.glyph.warnDisk)%")
-                            }
-                            Toggle("Peringatan CPU tinggi", isOn: $store.prefs.glyph.warnCPUOn)
-                            Stepper(value: $store.prefs.glyph.warnCPU, in: 50...100, step: 5) {
-                                Text("CPU merah di atas \(store.prefs.glyph.warnCPU)%")
-                            }
-                            .disabled(!store.prefs.glyph.warnCPUOn)
-                        }
-                        .disabled(!store.prefs.glyph.warnColors)
-                        Panel("Ukuran", symbol: "arrow.up.left.and.arrow.down.right") {
-                            Picker("Ukuran glyph", selection: $store.prefs.glyph.small) {
-                                Text("Standar").tag(false)
-                                Text("Kecil").tag(true)
-                            }
-                            .pickerStyle(.segmented)
-                            Picker("Jarak antar glyph", selection: $store.prefs.glyph.tight) {
-                                Text("Normal").tag(false)
-                                Text("Rapat").tag(true)
-                            }
-                            .pickerStyle(.segmented)
+            Section {
+                LabeledContent("Angka di samping") {
+                    HStack(spacing: 10) {
+                        ForEach(MetricKind.allCases) { k in
+                            Toggle(k.short, isOn: numberBinding(k))
+                                .toggleStyle(.checkbox)
                         }
                     }
                 }
-                .padding(.top, 8)
-            } label: {
-                Text("Lanjutan").font(.headline)
+                Picker("Ukuran glyph", selection: $store.prefs.glyph.small) {
+                    Text("Standar").tag(false)
+                    Text("Kecil").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Picker("Jarak antar glyph", selection: $store.prefs.glyph.tight) {
+                    Text("Normal").tag(false)
+                    Text("Rapat").tag(true)
+                }
+                .pickerStyle(.segmented)
+            } header: {
+                Text("Angka & ukuran")
+            } footer: {
+                footnote("Pada glyph tunggal (B), angka di samping hanya tampil untuk metrik di cincin.")
             }
         }
     }
@@ -1940,30 +1992,65 @@ struct IndicatorSettingsView: View {
         )
     }
 
-    // MARK: Tab Interaksi
+    // MARK: Tab Aplikasi (dulu Umum): semua isi menu klik kanan yang belum ada di sidebar
 
-    private var interactionTab: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if !store.prefs.style.isGlyph {
-                Note(text: "Klik dan tooltip per bagian hanya berlaku untuk gaya glyph. Pada gaya teks, klik kiri selalu membuka popover biasa.", symbol: "info.circle")
+    @ViewBuilder
+    private var appTab: some View {
+        Section {
+            Toggle("Buka saat login", isOn: loginBinding)
+        } header: {
+            Text("Umum")
+        }
+
+        Section {
+            LabeledContent("MoleApp", value: "v\(MoleBridge.shared.version)")
+            LabeledContent("Mole CLI", value: "v\(MoleBridge.shared.cliVersion)")
+            HStack {
+                if let v = live.updateVersion {
+                    Label("Update tersedia: \(v)", systemImage: "arrow.down.circle.fill")
+                        .foregroundStyle(Palette.nose)
+                } else {
+                    Text("Dicek otomatis saat dibuka lalu sehari sekali")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(live.updateVersion == nil ? "Cek pembaruan…" : "Update sekarang…") {
+                    appDelegate?.updater.checkNow()
+                }
             }
-            Panel("Klik & hover di menu bar", symbol: "cursorarrow.click") {
-                Toggle("Klik per bagian membuka popover di bagian itu", isOn: $store.prefs.glyph.clickRegions)
-                    .toggleStyle(.switch)
-                Toggle("Tooltip angka tepat saat kursor di atas bagian", isOn: $store.prefs.glyph.tooltips)
-                    .toggleStyle(.switch)
-                Note(text: "Klik kanan (atau Control-klik) tetap membuka menu: dashboard, fitur Mole CLI, Pengaturan, pembaruan, dan keluar.")
+        } header: {
+            Text("Versi & pembaruan")
+        }
+
+        Section {
+            actionRow("Menu interaktif mo di Terminal", "terminal", "Buka…") {
+                appDelegate?.openInteractiveCLI()
             }
+        } header: {
+            Text("Mole CLI")
+        } footer: {
+            footnote("Semua fitur Mole CLI (status, clean, uninstall, analyze, optimize, purge, installer, slim, history) ada di sidebar dashboard.")
+        }
+
+        Section {
+            actionRow("Uninstall MoleApp", "trash", "Uninstall…", destructive: true) {
+                appDelegate?.uninstallSelf()
+            }
+            actionRow("Keluar dari MoleApp", "power", "Keluar") {
+                NSApp.terminate(nil)
+            }
+        } header: {
+            Text("MoleApp")
+        } footer: {
+            footnote("Uninstall meminta konfirmasi dulu, lalu menghapus MoleApp dari Buka saat login, menghapus pengaturannya, dan memindahkan MoleApp.app ke Tong Sampah.")
         }
     }
 
-    // MARK: Tab Umum
-
-    private var generalTab: some View {
-        Panel("Umum", symbol: "gearshape") {
-            Toggle("Buka saat login", isOn: loginBinding)
-                .toggleStyle(.switch)
-            Note(text: "Pembaruan MoleApp dicek otomatis saat dibuka lalu sehari sekali; cek manual ada di menu klik kanan.")
+    private func actionRow(_ title: String, _ symbol: String, _ button: String, destructive: Bool = false, _ action: @escaping () -> Void) -> some View {
+        HStack {
+            Label(title, systemImage: symbol)
+            Spacer()
+            Button(button, role: destructive ? .destructive : nil, action: action)
         }
     }
 
@@ -1980,22 +2067,15 @@ struct IndicatorSettingsView: View {
         let img = rendered?.image
             ?? NSImage(systemSymbolName: "sparkles.rectangle.stack.fill", accessibilityDescription: "MoleApp")
             ?? NSImage(size: NSSize(width: 16, height: 16))
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Spacer()
-                Image(nsImage: img)
-                    .renderingMode(img.isTemplate || rendered == nil ? .template : .original)
-                    .foregroundStyle(scheme == .dark ? Color.white : Color.black)
-                    .padding(.horizontal, 10)
-                    .frame(height: 24)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.primary.opacity(0.06))
-                    )
-            }
-            if layout.isEmpty {
-                Note(text: "Semua metrik dimatikan: menu bar hanya menampilkan ikon MoleApp.")
-            }
-        }
+        return Image(nsImage: img)
+            .renderingMode(img.isTemplate || rendered == nil ? .template : .original)
+            .foregroundStyle(scheme == .dark ? Color.white : Color.black)
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .help(layout.isEmpty ? "Semua metrik dimatikan: menu bar hanya menampilkan ikon MoleApp." : "Pratinjau menu bar dengan angka live")
     }
 }
