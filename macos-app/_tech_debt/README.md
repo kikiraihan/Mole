@@ -4,4 +4,4 @@ Catatan konsep dan pekerjaan yang ditunda untuk MoleApp. Satu file per topik; ta
 
 | File | Status | Ringkasan |
 |---|---|---|
-| [combined-menubar-glyph.md](combined-menubar-glyph.md) | Konsep | Ikon gabungan ala Apple untuk CPU, RAM, storage, baterai, dan internet di menu bar (mockup: [combined-menubar-glyph/](combined-menubar-glyph/)) |
+| [combined-menubar-glyph.md](combined-menubar-glyph.md) | Selesai (1.6.0) | Ikon gabungan ala Apple untuk CPU, RAM, storage, baterai, dan internet di menu bar (mockup: [combined-menubar-glyph/](combined-menubar-glyph/)) |

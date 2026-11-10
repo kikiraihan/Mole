@@ -9,6 +9,8 @@ struct PopoverActions {
     let openTab: (Int?) -> Void
     let openTerminal: () -> Void
     let openMenu: () -> Void
+    /// Ikon cog: membuka halaman Pengaturan di dashboard (satu-satunya tempat pengaturan)
+    let openSettings: () -> Void
     let checkUpdate: () -> Void
     let quit: () -> Void
 }
@@ -71,27 +73,34 @@ struct PopoverView: View {
                 .help("Hitung ulang skor kesehatan")
             }
 
-            VStack(spacing: 9) {
+            VStack(spacing: 5) {
                 Meter(label: "CPU", value: String(format: "%.0f%%", live.cpu), fraction: live.cpu / 100, tint: Palette.level(live.cpu))
+                    .metricFocus(live.focus == .cpu)
                 Meter(
                     label: "Memori",
                     value: "\(formatBytes(Int64(live.memUsed))) / \(formatBytes(Int64(live.memTotal)))",
                     fraction: live.memPercent / 100,
                     tint: Palette.level(live.memPercent)
                 )
+                .metricFocus(live.focus == .mem)
                 Meter(
                     label: live.disk.name,
                     value: "\(formatBytes(live.disk.free)) sisa",
                     fraction: live.disk.percent / 100,
                     tint: Palette.diskLevel(live.disk.percent)
                 )
+                .metricFocus(live.focus == .disk)
                 HStack {
-                    Label(formatNetRate(live.netDown), systemImage: "arrow.down")
-                    Spacer()
-                    Label(formatNetRate(live.netUp), systemImage: "arrow.up")
+                    HStack {
+                        Label(formatNetRate(live.netDown), systemImage: "arrow.down")
+                        Spacer()
+                        Label(formatNetRate(live.netUp), systemImage: "arrow.up")
+                    }
+                    .metricFocus(live.focus == .net)
                     if let b = live.battery {
                         Spacer()
                         Label("\(b.percent)%", systemImage: b.charging ? "battery.100.bolt" : "battery.75")
+                            .metricFocus(live.focus == .bat)
                     }
                 }
                 .font(.system(.caption, design: .rounded))
@@ -127,9 +136,9 @@ struct PopoverView: View {
                 Button(action: actions.openTerminal) { Image(systemName: "terminal") }
                     .buttonStyle(.borderless)
                     .help("Menu interaktif mo di Terminal")
-                Button(action: actions.openMenu) { Image(systemName: "gearshape") }
+                Button(action: actions.openSettings) { Image(systemName: "gearshape") }
                     .buttonStyle(.borderless)
-                    .help("Pengaturan indikator")
+                    .help("Buka Pengaturan di dashboard")
                 Button(action: actions.quit) { Image(systemName: "power") }
                     .buttonStyle(.borderless)
                     .help("Keluar dari MoleApp")
@@ -143,5 +152,22 @@ struct PopoverView: View {
         if live.healthLoading && live.health == nil { return "Membaca kesehatan Mac…" }
         if !live.healthMsg.isEmpty { return live.healthMsg }
         return live.health == nil ? "Skor kesehatan belum tersedia." : "Skor kesehatan dari mo status."
+    }
+}
+
+extension View {
+    /// Sorotan bagian popover yang dibuka lewat klik per bagian di glyph menu bar.
+    /// Padding selalu dipasang supaya tata letak tidak bergeser saat sorotan berpindah.
+    func metricFocus(_ on: Bool) -> some View {
+        padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Palette.nose.opacity(on ? 0.14 : 0))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Palette.nose.opacity(on ? 0.55 : 0), lineWidth: 1)
+            )
     }
 }

@@ -253,76 +253,218 @@ extension Notification.Name {
 }
 
 /// Metrik yang ditampilkan di menu bar (kunci UserDefaults sama dengan versi sebelumnya)
+/// plus gaya indikator, urutan, dan pengaturan glyph. Semua kunci hanya dibaca/ditulis di sini.
 struct IndicatorPrefs: Equatable {
-    var cpu = true, mem = true, disk = true, net = false, bat = false, compact = false
+    var cpu = true, mem = true, disk = true, net = false, bat = false
+    var style: IndicatorStyle = .text2
+    var order: [MetricKind] = MetricKind.allCases
+    var interval: Double = 2.0
+    var glyph = GlyphPrefs()
+
+    var compact: Bool { style == .compact }
+
+    func isOn(_ k: MetricKind) -> Bool {
+        switch k {
+        case .cpu: return cpu
+        case .mem: return mem
+        case .disk: return disk
+        case .net: return net
+        case .bat: return bat
+        }
+    }
+
+    mutating func set(_ k: MetricKind, _ on: Bool) {
+        switch k {
+        case .cpu: cpu = on
+        case .mem: mem = on
+        case .disk: disk = on
+        case .net: net = on
+        case .bat: bat = on
+        }
+    }
+
+    var enabledInOrder: [MetricKind] { order.filter { isOn($0) } }
+
+    /// Nilai bawaan (didaftarkan AppDelegate; tombol "Kembalikan bawaan" menghapus kunci-kunci ini)
+    static let registeredDefaults: [String: Any] = [
+        "cpu": true,
+        "mem": true,
+        "disk": true,
+        "net": false,
+        "bat": false,
+        "interval": 2.0,
+        "indicatorStyle": IndicatorStyle.text2.rawValue,
+        "indicatorOrder": MetricKind.allCases.map(\.rawValue).joined(separator: ","),
+        "glyphRing": MetricKind.cpu.rawValue,
+        "glyphCenter": MetricKind.net.rawValue,
+        "glyphDots": MetricKind.mem.rawValue,
+        "glyphDiskMode": "used",
+        "glyphNetDirection": NetDirection.down.rawValue,
+        "glyphNetPreset": "home",
+        "glyphBolt": true,
+        "glyphNumbers": "",
+        "warnColors": true,
+        "warnBattery": 20,
+        "warnDisk": 10,
+        "warnCPUOn": false,
+        "warnCPU": 90,
+        "glyphSize": "standard",
+        "glyphSpacing": "normal",
+        "clickRegions": true,
+        "regionTooltips": true
+    ]
+
+    /// Versi lama menyimpan mode tampilan sebagai `compact` (Bool). Dipanggil sebelum register(defaults:)
+    /// supaya hanya nilai yang benar-benar tersimpan yang dibaca.
+    static func migrateLegacy(_ d: UserDefaults = .standard) {
+        guard d.object(forKey: "indicatorStyle") == nil, d.object(forKey: "compact") != nil else { return }
+        d.set((d.bool(forKey: "compact") ? IndicatorStyle.compact : .text2).rawValue, forKey: "indicatorStyle")
+        d.removeObject(forKey: "compact")
+    }
+
+    private static func kind(_ s: String?) -> MetricKind? { s.flatMap(MetricKind.init(rawValue:)) }
 
     static func load(_ d: UserDefaults = .standard) -> IndicatorPrefs {
-        IndicatorPrefs(
+        var p = IndicatorPrefs(
             cpu: d.bool(forKey: "cpu"), mem: d.bool(forKey: "mem"), disk: d.bool(forKey: "disk"),
-            net: d.bool(forKey: "net"), bat: d.bool(forKey: "bat"), compact: d.bool(forKey: "compact")
+            net: d.bool(forKey: "net"), bat: d.bool(forKey: "bat")
         )
+        p.style = IndicatorStyle(rawValue: d.string(forKey: "indicatorStyle") ?? "") ?? .text2
+        // Urutan: buang nilai tak dikenal/ganda, metrik yang hilang ditambahkan di akhir
+        var order: [MetricKind] = []
+        for k in (d.string(forKey: "indicatorOrder") ?? "").split(separator: ",").compactMap({ MetricKind(rawValue: String($0)) })
+        where !order.contains(k) {
+            order.append(k)
+        }
+        p.order = order + MetricKind.allCases.filter { !order.contains($0) }
+        p.interval = max(1.0, d.double(forKey: "interval"))
+
+        var g = GlyphPrefs()
+        if let r = kind(d.string(forKey: "glyphRing")), GlyphPrefs.ringOptions.contains(r) { g.ring = r }
+        g.center = kind(d.string(forKey: "glyphCenter")).flatMap { GlyphPrefs.centerOptions.contains($0) ? $0 : nil }
+        g.dots = kind(d.string(forKey: "glyphDots")).flatMap { GlyphPrefs.dotsOptions.contains($0) ? $0 : nil }
+        g.diskShowsFree = d.string(forKey: "glyphDiskMode") == "free"
+        g.netDirection = NetDirection(rawValue: d.string(forKey: "glyphNetDirection") ?? "") ?? .down
+        g.netFast = d.string(forKey: "glyphNetPreset") == "fast"
+        g.bolt = d.bool(forKey: "glyphBolt")
+        g.numbers = Set((d.string(forKey: "glyphNumbers") ?? "").split(separator: ",").compactMap { MetricKind(rawValue: String($0)) })
+        g.warnColors = d.bool(forKey: "warnColors")
+        g.warnBattery = min(50, max(5, d.integer(forKey: "warnBattery")))
+        g.warnDisk = min(30, max(1, d.integer(forKey: "warnDisk")))
+        g.warnCPUOn = d.bool(forKey: "warnCPUOn")
+        g.warnCPU = min(100, max(50, d.integer(forKey: "warnCPU")))
+        g.small = d.string(forKey: "glyphSize") == "small"
+        g.tight = d.string(forKey: "glyphSpacing") == "tight"
+        g.clickRegions = d.bool(forKey: "clickRegions")
+        g.tooltips = d.bool(forKey: "regionTooltips")
+        p.glyph = g
+        return p
+    }
+
+    func save(_ d: UserDefaults = .standard) {
+        d.set(cpu, forKey: "cpu")
+        d.set(mem, forKey: "mem")
+        d.set(disk, forKey: "disk")
+        d.set(net, forKey: "net")
+        d.set(bat, forKey: "bat")
+        d.set(interval, forKey: "interval")
+        d.set(style.rawValue, forKey: "indicatorStyle")
+        d.set(order.map(\.rawValue).joined(separator: ","), forKey: "indicatorOrder")
+        d.set(glyph.ring.rawValue, forKey: "glyphRing")
+        d.set(glyph.center?.rawValue ?? "none", forKey: "glyphCenter")
+        d.set(glyph.dots?.rawValue ?? "none", forKey: "glyphDots")
+        d.set(glyph.diskShowsFree ? "free" : "used", forKey: "glyphDiskMode")
+        d.set(glyph.netDirection.rawValue, forKey: "glyphNetDirection")
+        d.set(glyph.netFast ? "fast" : "home", forKey: "glyphNetPreset")
+        d.set(glyph.bolt, forKey: "glyphBolt")
+        d.set(MetricKind.allCases.filter { glyph.numbers.contains($0) }.map(\.rawValue).joined(separator: ","), forKey: "glyphNumbers")
+        d.set(glyph.warnColors, forKey: "warnColors")
+        d.set(glyph.warnBattery, forKey: "warnBattery")
+        d.set(glyph.warnDisk, forKey: "warnDisk")
+        d.set(glyph.warnCPUOn, forKey: "warnCPUOn")
+        d.set(glyph.warnCPU, forKey: "warnCPU")
+        d.set(glyph.small ? "small" : "standard", forKey: "glyphSize")
+        d.set(glyph.tight ? "tight" : "normal", forKey: "glyphSpacing")
+        d.set(glyph.clickRegions, forKey: "clickRegions")
+        d.set(glyph.tooltips, forKey: "regionTooltips")
     }
 }
 
 /// Isi indikator: kolom (mode 2 baris), item (mode ringkas), dan `key` teks yang tampil.
 /// `key` dipakai untuk melewati render ulang gambar saat angka di menu bar tidak berubah.
+/// Gaya glyph (A/B) digambar GlyphRenderer; `key`-nya berisi level terkuantisasi, bukan angka mentah.
 struct IndicatorLayout {
     let cols: [Col]
     let items: [CompactItem]
     let compact: Bool
     let key: String
+    let prefs: IndicatorPrefs
+    let values: MetricValues
+    let dark: Bool
 
-    var isEmpty: Bool { cols.isEmpty }
+    var isEmpty: Bool { prefs.style == .glyphSingle ? false : cols.isEmpty }
 
-    init(_ p: IndicatorPrefs, cpu: Double, memPercent: Double, diskFree: Int64, up: Double, down: Double, bat: BatterySnapshot?) {
+    init(_ p: IndicatorPrefs, _ v: MetricValues, dark: Bool = false) {
         var cols: [Col] = []
         var items: [CompactItem] = []
 
-        if p.cpu {
-            let v = String(format: "%.0f%%", cpu)
-            cols.append(Col(top: "CPU", bottom: v, topIsLabel: true, template: "99%"))
-            items.append(CompactItem(symbol: "cpu", text: v, template: "99%"))
-        }
-        if p.mem {
-            let v = String(format: "%.0f%%", memPercent)
-            cols.append(Col(top: "RAM", bottom: v, topIsLabel: true, template: "99%"))
-            items.append(CompactItem(symbol: "memorychip", text: v, template: "99%"))
-        }
-        if p.disk {
-            // sisa ruang dalam GB desimal, sama seperti Finder
-            let v = String(format: "%.0fGB", Double(diskFree) / 1_000_000_000.0)
-            cols.append(Col(top: "SSD", bottom: v, topIsLabel: true, template: ""))
-            items.append(CompactItem(symbol: "internaldrive", text: v, template: ""))
-        }
-        if p.net {
-            let upS = fmtRate(up, short: true), dn = fmtRate(down, short: true)
-            cols.append(Col(top: "↑" + upS, bottom: "↓" + dn, topIsLabel: false, template: "↓999.9K"))
-            items.append(CompactItem(symbol: "arrow.up.arrow.down", text: "↓" + dn, template: "↓99.9K"))
-        }
-        if p.bat, let b = bat {
-            let v = (b.onAC ? "⚡" : "") + "\(b.percent)%"
-            cols.append(Col(top: "BAT", bottom: v, topIsLabel: true, template: "⚡99%"))
-            items.append(CompactItem(
-                symbol: b.onAC ? "battery.100.bolt" : "battery.100",
-                text: "\(b.percent)%",
-                template: "99%"
-            ))
+        // Kolom dibangun mengikuti urutan dari Pengaturan
+        for k in p.enabledInOrder {
+            switch k {
+            case .cpu:
+                let val = String(format: "%.0f%%", v.cpu)
+                cols.append(Col(top: "CPU", bottom: val, topIsLabel: true, template: "99%"))
+                items.append(CompactItem(symbol: "cpu", text: val, template: "99%"))
+            case .mem:
+                let val = String(format: "%.0f%%", v.memPercent)
+                cols.append(Col(top: "RAM", bottom: val, topIsLabel: true, template: "99%"))
+                items.append(CompactItem(symbol: "memorychip", text: val, template: "99%"))
+            case .disk:
+                // sisa ruang dalam GB desimal, sama seperti Finder
+                let val = String(format: "%.0fGB", Double(v.disk.free) / 1_000_000_000.0)
+                cols.append(Col(top: "SSD", bottom: val, topIsLabel: true, template: ""))
+                items.append(CompactItem(symbol: "internaldrive", text: val, template: ""))
+            case .net:
+                let upS = fmtRate(v.up, short: true), dn = fmtRate(v.down, short: true)
+                cols.append(Col(top: "↑" + upS, bottom: "↓" + dn, topIsLabel: false, template: "↓999.9K"))
+                items.append(CompactItem(symbol: "arrow.up.arrow.down", text: "↓" + dn, template: "↓99.9K"))
+            case .bat:
+                guard let b = v.bat else { continue }
+                let val = (b.onAC ? "⚡" : "") + "\(b.percent)%"
+                cols.append(Col(top: "BAT", bottom: val, topIsLabel: true, template: "⚡99%"))
+                items.append(CompactItem(
+                    symbol: b.onAC ? "battery.100.bolt" : "battery.100",
+                    text: "\(b.percent)%",
+                    template: "99%"
+                ))
+            }
         }
 
         self.cols = cols
         self.items = items
         self.compact = p.compact
-        if p.compact {
+        self.prefs = p
+        self.values = v
+        self.dark = dark
+        switch p.style {
+        case .compact:
             key = "c|" + items.map { $0.symbol + ":" + $0.text }.joined(separator: "|")
-        } else {
+        case .text2:
             key = "f|" + cols.map { $0.top + "/" + $0.bottom }.joined(separator: "|")
+        case .glyphRow, .glyphSingle:
+            key = GlyphRenderer.key(p, v, dark: dark)
         }
     }
 
     /// nil kalau semua metrik dimatikan (pemanggil menampilkan ikon aplikasi)
-    func render() -> NSImage? {
-        guard !cols.isEmpty else { return nil }
-        return compact ? renderCompact(items) : renderFull(cols)
+    func render() -> IndicatorRender? {
+        switch prefs.style {
+        case .glyphRow, .glyphSingle:
+            return GlyphRenderer.render(prefs, values, dark: dark)
+        case .text2, .compact:
+            guard !cols.isEmpty else { return nil }
+            return IndicatorRender(image: compact ? renderCompact(items) : renderFull(cols), regions: [])
+        }
     }
 }
 
@@ -772,7 +914,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
 
 // MARK: - 6. Menu Bar Indicator AppDelegate (Ala LiteMonitor + Mole Quick Actions)
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSViewToolTipOwner {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     let defaults = UserDefaults.standard
@@ -810,6 +952,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 self?.popover.performClose(nil)
                 self?.showMenu()
             },
+            openSettings: { [weak self] in
+                guard let self else { return }
+                self.popover.performClose(nil)
+                self.dashboard.show(tab: Feature.settings.rawValue)
+            },
             checkUpdate: { [weak self] in
                 guard let self else { return }
                 self.popover.performClose(nil)
@@ -830,6 +977,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuIsOpen = false
     /// Teks indikator terakhir yang digambar; sama → gambar NSImage lama dipakai lagi
     private var lastBarKey: String?
+    /// Pengaturan indikator di-cache; dibaca ulang hanya saat Pengaturan berubah (bukan tiap tick)
+    private var prefs = IndicatorPrefs()
+    /// Bagian glyph yang bisa diklik/di-hover (koordinat gambar) dan ukuran gambar terakhir
+    private var regions: [GlyphRegion] = []
+    private var barImageSize: NSSize = .zero
 
     private var cpuPct: Double = 0
     private var mem: (used: UInt64, total: UInt64, percent: Double) = (0, 1, 0)
@@ -844,21 +996,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let netRow = NSMenuItem(title: "Jaringan: —", action: nil, keyEquivalent: "")
     private let batRow = NSMenuItem(title: "Baterai: —", action: nil, keyEquivalent: "")
 
-    private var metricItems: [NSMenuItem] = []
-    private var intervalItems: [NSMenuItem] = []
-    private let compactItem = NSMenuItem(title: "Mode ringkas (1 baris)", action: #selector(toggleCompact), keyEquivalent: "")
-    private let loginItem = NSMenuItem(title: "Buka saat login", action: #selector(toggleLogin), keyEquivalent: "")
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        defaults.register(defaults: [
-            "cpu": true,
-            "mem": true,
-            "disk": true,
-            "net": false,
-            "bat": false,
-            "compact": false,
-            "interval": 2.0
-        ])
+        // `compact` lama → `indicatorStyle`; harus sebelum register supaya hanya nilai tersimpan yang dibaca
+        IndicatorPrefs.migrateLegacy(defaults)
+        defaults.register(defaults: IndicatorPrefs.registeredDefaults)
+        prefs = IndicatorPrefs.load(defaults)
 
         // Klik kiri: popover ringkas; klik kanan (atau Control-klik): menu lengkap
         if let btn = statusItem.button {
@@ -907,16 +1049,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
             showMenu()
         } else {
-            togglePopover()
+            // Klik per bagian (gaya glyph): posisi klik menentukan bagian popover yang disorot
+            var focus: MetricKind?
+            if prefs.style.isGlyph, prefs.glyph.clickRegions, let e = event {
+                focus = region(at: sender.convert(e.locationInWindow, from: nil), in: sender)
+            }
+            togglePopover(focus: focus)
         }
     }
 
-    private func togglePopover() {
+    /// Titik di tombol status → koordinat gambar (y ke bawah, gambar berada di tengah tombol) → bagian glyph
+    private func region(at p: NSPoint, in view: NSView) -> MetricKind? {
+        let b = view.bounds
+        let ox = (b.width - barImageSize.width) / 2
+        let oy = (b.height - barImageSize.height) / 2
+        let pt = CGPoint(x: p.x - ox, y: (view.isFlipped ? p.y : b.height - p.y) - oy)
+        return regions.first { $0.contains(pt) }?.kind
+    }
+
+    /// Tooltip per bagian: satu persegi tooltip per bagian glyph, teksnya diminta saat akan tampil
+    /// supaya angkanya selalu terbaru.
+    private func refreshToolTips() {
+        guard let btn = statusItem.button else { return }
+        btn.removeAllToolTips()
+        guard prefs.style.isGlyph, prefs.glyph.tooltips, !regions.isEmpty else { return }
+        let b = btn.bounds
+        let ox = (b.width - barImageSize.width) / 2
+        let oy = (b.height - barImageSize.height) / 2
+        for r in regions {
+            for rect in r.rects {
+                let y = btn.isFlipped ? oy + rect.minY : b.height - (oy + rect.maxY)
+                btn.addToolTip(NSRect(x: ox + rect.minX, y: y, width: rect.width, height: rect.height), owner: self, userData: nil)
+            }
+        }
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        guard let k = region(at: point, in: view) else { return "" }
+        return GlyphRenderer.tooltip(k, metricValues())
+    }
+
+    private func metricValues() -> MetricValues {
+        MetricValues(cpu: cpuPct, memPercent: mem.percent, memUsed: mem.used, memTotal: mem.total,
+                     disk: disk, up: rate.up, down: rate.down, bat: bat)
+    }
+
+    private func togglePopover(focus: MetricKind? = nil) {
         guard let btn = statusItem.button else { return }
         if popover.isShown {
             popover.performClose(nil)
             return
         }
+        LiveMetrics.shared.focus = focus
         tick()
         pushLive()
         LiveMetrics.shared.refreshHealth()
@@ -940,7 +1124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func startTimer() {
         timer?.invalidate()
-        let sec = max(1.0, defaults.double(forKey: "interval"))
+        let sec = prefs.interval
         let t = Timer(timeInterval: sec, repeats: true) { [weak self] _ in
             self?.tick()
         }
@@ -986,11 +1170,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let btn = statusItem.button else { return }
 
         // Isi kolom kini dibangun IndicatorLayout (dipakai juga oleh pratinjau di tab Pengaturan Indikator)
-        let layout = IndicatorLayout(
-            IndicatorPrefs.load(defaults),
-            cpu: cpuPct, memPercent: mem.percent, diskFree: disk.free,
-            up: rate.up, down: rate.down, bat: bat
-        )
+        // Gaya glyph dengan warna peringatan bukan template, jadi tinta mengikuti tampilan menu bar
+        let dark = btn.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let layout = IndicatorLayout(prefs, metricValues(), dark: dark)
         // Angka sama dengan tick sebelumnya → tidak perlu menggambar ulang NSImage
         // (render teks + SF Symbol adalah pekerjaan termahal tiap tick)
         guard layout.key != lastBarKey else { return }
@@ -1000,11 +1182,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         btn.title = ""
         btn.imagePosition = .imageOnly
 
-        if let img = layout.render() {
-            btn.image = img
+        let oldRegions = regions, oldSize = barImageSize
+        if let r = layout.render() {
+            btn.image = r.image
+            regions = r.regions
+            barImageSize = r.image.size
         } else {
             // semua metrik dimatikan → tampilkan ikon kecil saja supaya popover/menu tetap bisa dibuka
             btn.image = renderIcon()
+            regions = []
+            barImageSize = .zero
+        }
+        if prefs.style.isGlyph {
+            btn.setAccessibilityLabel(GlyphRenderer.accessibilitySummary(GlyphRenderer.visibleKinds(prefs, metricValues()), metricValues()))
+        } else {
+            btn.setAccessibilityLabel("MoleApp")
+        }
+        // Persegi tooltip dipasang ulang setelah tombol menyesuaikan lebar gambar baru
+        if regions != oldRegions || barImageSize != oldSize {
+            DispatchQueue.main.async { [weak self] in self?.refreshToolTips() }
         }
     }
 
@@ -1037,7 +1233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             ("💿 Installer Cleanup (`mo installer`)", 6, "7"),
             ("✂️ Slim Universal Apps (`mo slim`)", 7, "8"),
             ("🕓 Audit History & Tools (`mo history`)", 8, "9"),
-            ("⚙️ Pengaturan Indikator", Feature.settings.rawValue, "0")
+            ("⚙️ Pengaturan", Feature.settings.rawValue, "0")
         ]
         for (label, tabIdx, key) in features {
             let item = NSMenuItem(title: label, action: #selector(openDashboardTab(_:)), keyEquivalent: key)
@@ -1056,43 +1252,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // Submenu: Tampilkan di Menu Bar (seperti LiteMonitor)
-        let showMenu = NSMenu()
-        for (title, key) in [
-            ("CPU", "cpu"),
-            ("Memori (RAM)", "mem"),
-            ("Sisa SSD", "disk"),
-            ("Kecepatan Jaringan", "net"),
-            ("Baterai", "bat")
-        ] {
-            let it = NSMenuItem(title: title, action: #selector(toggleMetric(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = key
-            showMenu.addItem(it)
-            metricItems.append(it)
-        }
-        let showItem = NSMenuItem(title: "Tampilkan di menu bar", action: nil, keyEquivalent: "")
-        showItem.submenu = showMenu
-        menu.addItem(showItem)
-
-        compactItem.target = self
-        menu.addItem(compactItem)
-
-        // Submenu: Interval Update
-        let intMenu = NSMenu()
-        for s in indicatorIntervals {
-            let it = NSMenuItem(title: "\(Int(s)) detik", action: #selector(setInterval(_:)), keyEquivalent: "")
-            it.target = self
-            it.representedObject = s
-            intMenu.addItem(it)
-            intervalItems.append(it)
-        }
-        let intItem = NSMenuItem(title: "Interval update", action: nil, keyEquivalent: "")
-        intItem.submenu = intMenu
-        menu.addItem(intItem)
-
-        loginItem.target = self
-        menu.addItem(loginItem)
+        // Semua pengaturan (indikator, glyph, interaksi, buka saat login) ada di satu halaman
+        // Pengaturan di dashboard, supaya tidak ada dua tempat yang bisa membingungkan
+        let settingsItem = NSMenuItem(title: "Pengaturan…", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
         menu.addItem(updater.menuItem)
@@ -1116,23 +1280,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func updateChecks() {
-        for it in metricItems {
-            let key = it.representedObject as? String ?? ""
-            it.state = defaults.bool(forKey: key) ? .on : .off
-        }
-        compactItem.state = defaults.bool(forKey: "compact") ? .on : .off
-        let cur = defaults.double(forKey: "interval")
-        for it in intervalItems {
-            it.state = ((it.representedObject as? Double) == cur) ? .on : .off
-        }
-        loginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
-    }
-
     func menuWillOpen(_ menu: NSMenu) {
         if menu === self.menu { menuIsOpen = true }
         tick()
-        updateChecks()
     }
 
     // MARK: - Menu Actions
@@ -1167,49 +1317,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MoleBridge.shared.openInTerminal("")
     }
 
-    @objc private func toggleMetric(_ sender: NSMenuItem) {
-        guard let key = sender.representedObject as? String else { return }
-        defaults.set(!defaults.bool(forKey: key), forKey: key)
-        updateChecks()
-        updateBar()
+    @objc private func openSettings() {
+        dashboard.show(tab: Feature.settings.rawValue)
     }
 
-    @objc private func toggleCompact() {
-        defaults.set(!defaults.bool(forKey: "compact"), forKey: "compact")
-        updateChecks()
-        updateBar()
-    }
-
-    @objc private func setInterval(_ sender: NSMenuItem) {
-        guard let v = sender.representedObject as? Double else { return }
-        defaults.set(v, forKey: "interval")
-        updateChecks()
-        startTimer()
-    }
-
-    /// Tab Pengaturan Indikator mengubah UserDefaults → sinkronkan centang menu, gambar ulang, dan interval timer
+    /// Halaman Pengaturan mengubah UserDefaults → baca ulang pengaturan, gambar ulang, dan sesuaikan interval timer
     @objc private func indicatorSettingsChanged() {
-        updateChecks()
+        prefs = IndicatorPrefs.load(defaults)
         lastBarKey = nil
         updateBar()
-        let sec = max(1.0, defaults.double(forKey: "interval"))
-        if timer?.timeInterval != sec { startTimer() }
-    }
-
-    @objc private func toggleLogin() {
-        do {
-            if SMAppService.mainApp.status == .enabled {
-                try SMAppService.mainApp.unregister()
-            } else {
-                try SMAppService.mainApp.register()
-            }
-        } catch {
-            let a = NSAlert()
-            a.messageText = "Gagal mengatur 'Buka saat login'"
-            a.informativeText = "Pastikan MoleApp.app berada di folder /Applications.\n\n\(error.localizedDescription)"
-            a.runModal()
-        }
-        updateChecks()
+        refreshToolTips()
+        if timer?.timeInterval != prefs.interval { startTimer() }
     }
 
     @objc private func uninstallSelf() {

@@ -3,7 +3,8 @@
 Aplikasi macOS **ringan** berbasis **Swift + SwiftUI + AppKit** yang menggabungkan:
 1. **macOS Menu Bar Indicator** (seperti [LiteMonitor](https://github.com/kikiraihan/mac-os-lite-monitor) & [LiteCalendar](https://github.com/kikiraihan/our-life-planner-calendar-mac-os)) untuk memantau CPU, RAM, sisa SSD, kecepatan jaringan, baterai, dan Health Score secara real-time.
    - **Klik kiri** ikon: popover berisi cincin Health Score (`mo status --json`), meter CPU/RAM/Disk/Jaringan/Baterai, dan 6 tombol akses cepat (Bersihkan, Uninstall, Analisis Disk, Optimasi, Purge, Kesehatan).
-   - **Klik kanan** ikon: menu lengkap (pilih metrik di menu bar, mode ringkas/2 baris, interval update, Buka saat Login, cek pembaruan, uninstall MoleApp).
+   - **Klik kanan** ikon: menu lengkap (dashboard, fitur Mole CLI, **Pengaturan…** ⌘,, cek pembaruan, uninstall MoleApp). Sejak 1.6.0 semua pengaturan ada di satu halaman Pengaturan di dashboard; ikon cog di popover juga membukanya.
+   - **Gaya indikator** (1.6.0): Teks 2 baris (bawaan), Teks ringkas, **Glyph baris (A)** (RAM = batang sinyal, Internet = kipas busur, Baterai, Storage = silinder berisi, CPU = cincin), atau **Glyph tunggal (B)** (cincin + pusat + titik, ±22 pt, aman untuk notch). Pada gaya glyph, klik di satu bagian membuka popover dengan bagian itu disorot dan tooltip menampilkan angka tepat. Desain: [`_tech_debt/combined-menubar-glyph.md`](_tech_debt/combined-menubar-glyph.md).
 2. **Mac App Dashboard Lengkap** (SwiftUI, sidebar bergrup) yang membungkus seluruh fitur utama **Mole CLI (`mo`)** dengan pratinjau `--dry-run` dan integrasi Terminal untuk langkah yang butuh sudo atau pilihan interaktif:
    - **Kesehatan (`mo status --json`)**: Cincin skor kesehatan, info hardware, panel CPU/memori/disk/baterai/suhu & daya/Trash, serta grafik proses terberat menurut CPU dan menurut RAM. Ukuran Tong Sampah dibaca langsung bila MoleApp punya Full Disk Access, atau lewat Finder (izin Automation) bila belum.
    - **Bersihkan (`mo clean`)**: Pratinjau `--dry-run` dengan output streaming, daftar kandidat `~/.config/mole/clean-list.txt`, whitelist, pembersihan user-level, serta full clean (sudo) via Terminal.
@@ -14,7 +15,7 @@ Aplikasi macOS **ringan** berbasis **Swift + SwiftUI + AppKit** yang menggabungk
    - **Installer (`mo installer`)**: Temukan file installer `.dmg`, `.pkg`, `.iso`, `.xip`, `.zip`.
    - **Slim Apps (`mo slim`)**: Pindai dan hapus arsitektur Intel (`x86_64`) dari Universal Apps di Apple Silicon.
    - **Riwayat & Alat (`mo history --json`)**: Daftar sesi operasi dan file yang dihapus/dipindah ke Trash, serta pintasan Touch ID untuk `sudo` (`mo touchid`), shell completion (`mo completion`), whitelist clean/optimize, folder proyek purge, folder konfigurasi, dan log operasi.
-   - **Pengaturan Indikator**: Pilih metrik yang tampil di menu bar (CPU, RAM, sisa SSD, jaringan, baterai), mode 2 baris/ringkas, interval update, dan Buka saat Login, lengkap dengan pratinjau indikator live. Sinkron dengan menu klik kanan.
+   - **Pengaturan**: Satu halaman bertab dengan pratinjau indikator live. **Indikator**: gaya tampilan, metrik yang tampil beserta urutannya, interval update. **Glyph**: isi slot glyph tunggal (cincin/pusat/titik), warna peringatan, dan bagian *Lanjutan* (cara membaca storage/internet, petir, angka di samping glyph, ambang peringatan baterai/disk/CPU, ukuran dan jarak glyph). **Interaksi**: klik dan tooltip per bagian. **Umum**: Buka saat Login.
 
 ### Desain
 Tema "liang tikus tanah": aksen merah muda hidung mole `#D9668A`, hijau lumut `#6E9F6B` untuk kondisi sehat, amber `#E0A43A` untuk waspada, merah bara `#D9534F` untuk kritis. Angka dan judul memakai SF Rounded; latar mengikuti mode terang/gelap macOS.

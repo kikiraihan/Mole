@@ -1,6 +1,6 @@
 # Konsep: Ikon Gabungan Menu Bar ala Apple (CPU, RAM, Storage, Baterai, Internet)
 
-Status: **konsep, belum diimplementasi**. Dicatat 2026-11-09.
+Status: **diimplementasi di MoleApp 1.6.0** (`Sources/MoleApp/MenuBarGlyph.swift`, halaman Pengaturan bertab). Dicatat 2026-11-09, diimplementasi 2026-11-10.
 
 ## Latar
 
