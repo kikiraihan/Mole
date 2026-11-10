@@ -6,6 +6,9 @@
 // untuk Internet), dan pusat glyph B bisa diisi CPU/RAM/Storage berupa angka kecil.
 // Sejak 1.8.0: glyph A bisa ditata 1 baris (seperti sebelumnya) atau grid 2 baris berisi ikon mini
 // (kolom diisi atas lalu bawah, mengikuti urutan metrik), jadi lebarnya kira-kira separuh.
+// Sejak 1.9.0: ikon CPU (cincin + chip, kotak CPU 4 level, batang sinyal, garis sejajar) dan ikon
+// Baterai (horizontal, vertikal, lingkaran, batang lurus) di glyph A bisa diganti, dan angka CPU/RAM
+// bisa dibaca sebagai persen atau angka (core terpakai / GB terpakai).
 // Semua glyph digambar dengan Core Graphics di koordinat "unit" (sama dengan mockup SVG),
 // lalu diskalakan ke tinggi menu bar 22 pt. Tanpa warna peringatan → template image (ikut
 // terang/gelap otomatis); dengan warna peringatan → gambar biasa dengan tinta putih/hitam.
@@ -77,14 +80,22 @@ enum MetricKind: String, CaseIterable, Identifiable {
 }
 
 /// Bentuk ikon per metrik pada glyph baris (A). RAM dan Internet bisa memilih bentuknya.
+/// Sejak 1.9.0 CPU dan Baterai juga bisa memilih bentuknya.
 enum GlyphIcon: String, CaseIterable, Identifiable {
     case lanes, bars, fan
+    case ring, chip            // CPU: cincin dengan chip di tengah (bawaan), kotak CPU berisi 4 level
+    case batH, batV, pill      // Baterai: horizontal (bawaan), vertikal, batang lurus (lingkaran = .ring)
     var id: String { rawValue }
     var title: String {
         switch self {
         case .lanes: return "Garis sejajar"
         case .bars: return "Batang sinyal"
         case .fan: return "Kipas busur"
+        case .ring: return "Lingkaran"
+        case .chip: return "Kotak CPU (4 level)"
+        case .batH: return "Baterai horizontal"
+        case .batV: return "Baterai vertikal"
+        case .pill: return "Batang lurus"
         }
     }
 }
@@ -121,10 +132,16 @@ struct GlyphPrefs: Equatable {
     // Varian A: bentuk ikon RAM dan Internet
     var memIcon: GlyphIcon = .lanes
     var netIcon: GlyphIcon = .fan
+    // Varian A: bentuk ikon CPU dan Baterai (sejak 1.9.0)
+    var cpuIcon: GlyphIcon = .ring
+    var batIcon: GlyphIcon = .batH
     // Varian A: tata letak 1 baris atau grid 2 baris (sejak 1.8.0)
     var rowLayout: GlyphLayout = .single
     // Cara membaca metrik
     var diskShowsFree = false
+    // Angka CPU/RAM: persen (bawaan) atau angka (core terpakai / GB terpakai), sejak 1.9.0
+    var cpuShowsNumber = false
+    var memShowsNumber = false
     var netDirection: NetDirection = .down
     var netFast = false
     var bolt = true
@@ -147,6 +164,8 @@ struct GlyphPrefs: Equatable {
     static let centerOptions: [MetricKind] = [.net, .bat, .cpu, .mem, .disk]
     static let memIconOptions: [GlyphIcon] = [.lanes, .bars]
     static let netIconOptions: [GlyphIcon] = [.fan, .bars]
+    static let cpuIconOptions: [GlyphIcon] = [.ring, .chip, .bars, .lanes]
+    static let batIconOptions: [GlyphIcon] = [.batH, .batV, .ring, .pill]
     static let dotsOptions: [MetricKind] = [.mem, .cpu, .disk]
 
     /// Ambang busur internet (byte/detik): Rumahan 10 KB/s · 1 MB/s · 10 MB/s, Cepat 100 KB/s · 10 MB/s · 100 MB/s
@@ -210,6 +229,22 @@ enum GlyphRenderer {
 
     private static func q(_ pct: Double) -> Double { (min(100, max(0, pct)) / 5).rounded() * 5 / 100 }
 
+    /// Jumlah langkah menyala dari pecahan 0...1 (batang sinyal 4, garis sejajar 5, kotak CPU 4)
+    private static func steps(_ frac: Double, _ n: Int) -> Int { Int((min(1, max(0, frac)) * Double(n)).rounded()) }
+
+    /// Core CPU yang sedang terpakai (persen CPU × jumlah core logis)
+    static func coresUsed(_ v: MetricValues) -> Double {
+        min(100, max(0, v.cpu)) / 100 * Double(ProcessInfo.processInfo.activeProcessorCount)
+    }
+
+    /// RAM terpakai dalam GB biner (16 GB RAM tampil 16, sama seperti Activity Monitor)
+    static func memGB(_ v: MetricValues) -> Double { Double(v.memUsed) / 1_073_741_824.0 }
+
+    /// Angka 1 desimal di bawah 10, bulat di atasnya (contoh 3.2, 12, 128)
+    private static func compactNumber(_ x: Double) -> String {
+        x < 9.95 ? String(format: "%.1f", x) : String(format: "%.0f", x)
+    }
+
     private static func levels(_ p: GlyphPrefs, _ v: MetricValues) -> Levels {
         var l = Levels()
         l.cpu = q(v.cpu)
@@ -247,8 +282,8 @@ enum GlyphRenderer {
 
     static func numberText(_ k: MetricKind, _ p: GlyphPrefs, _ v: MetricValues) -> String {
         switch k {
-        case .cpu: return String(format: "%.0f%%", v.cpu)
-        case .mem: return String(format: "%.0f%%", v.memPercent)
+        case .cpu: return p.cpuShowsNumber ? compactNumber(coresUsed(v)) : String(format: "%.0f%%", v.cpu)
+        case .mem: return p.memShowsNumber ? compactNumber(memGB(v)) + "G" : String(format: "%.0f%%", v.memPercent)
         case .disk:
             return p.diskShowsFree
                 ? String(format: "%.0fG", Double(v.disk.free) / 1_000_000_000.0)
@@ -267,6 +302,8 @@ enum GlyphRenderer {
         switch k {
         case .net: return "999.9K"
         case .disk: return p.diskShowsFree ? "999G" : "100%"
+        case .cpu: return p.cpuShowsNumber ? "99.9" : "100%"
+        case .mem: return p.memShowsNumber ? "99.9G" : "100%"
         default: return "100%"
         }
     }
@@ -277,8 +314,8 @@ enum GlyphRenderer {
     /// Angka pusat maksimal 3 karakter supaya muat di dalam cincin (tanpa tanda %)
     static func centerText(_ k: MetricKind, _ p: GlyphPrefs, _ v: MetricValues) -> String {
         switch k {
-        case .cpu: return String(format: "%.0f", min(100, max(0, v.cpu)))
-        case .mem: return String(format: "%.0f", min(100, max(0, v.memPercent)))
+        case .cpu: return p.cpuShowsNumber ? compactNumber(coresUsed(v)) : String(format: "%.0f", min(100, max(0, v.cpu)))
+        case .mem: return p.memShowsNumber ? compactNumber(memGB(v)) : String(format: "%.0f", min(100, max(0, v.memPercent)))
         case .disk:
             guard p.diskShowsFree else { return String(format: "%.0f", min(100, max(0, v.disk.percent))) }
             let gb = Double(v.disk.free) / 1_000_000_000.0
@@ -290,7 +327,7 @@ enum GlyphRenderer {
     static func tooltip(_ k: MetricKind, _ v: MetricValues) -> String {
         switch k {
         case .cpu:
-            return String(format: "CPU %.0f%%", v.cpu)
+            return String(format: "CPU %.0f%% · %.1f dari %ld core", v.cpu, coresUsed(v), ProcessInfo.processInfo.activeProcessorCount)
         case .mem:
             return String(format: "RAM %@ / %@ · %.0f%%", formatBytes(Int64(v.memUsed)), formatBytes(Int64(v.memTotal)), v.memPercent)
         case .disk:
@@ -326,6 +363,7 @@ enum GlyphRenderer {
         let l = levels(p.glyph, v)
         var parts = [
             p.style.rawValue, dark ? "d" : "l", p.glyph.memIcon.rawValue, p.glyph.netIcon.rawValue, p.glyph.rowLayout.rawValue,
+            p.glyph.cpuIcon.rawValue, p.glyph.batIcon.rawValue,
             "\(l.cpu)", "\(l.memBars)", "\(l.mem)", "\(l.diskFill)", "\(l.netLevel)",
             "\(l.bat ?? -1)", "\(l.charging)", "\(l.batWarn)", "\(l.diskWarn)", "\(l.cpuWarn)"
         ]
@@ -465,13 +503,28 @@ enum GlyphRenderer {
     /// Ikon satu metrik glyph A di koordinat unit (tinggi 16); dipakai tata letak 1 baris maupun grid
     private static func drawRowIcon(_ ctx: CGContext, _ k: MetricKind, _ g: GlyphPrefs, _ l: Levels, ink: NSColor) {
         switch k {
-        case .cpu: drawCPU(ctx, l.cpu, ink: ink, accent: l.cpuWarn ? red : ink)
+        case .cpu:
+            let accent = l.cpuWarn ? red : ink
+            switch g.cpuIcon {
+            case .chip: drawChip(ctx, steps(l.cpu, 4), ink: ink, on: accent)
+            case .bars: drawBars(ctx, steps(l.cpu, 4), ink: ink, on: accent)
+            case .lanes: drawRAM(ctx, steps(l.cpu, 5), ink: ink, on: accent)
+            default: drawCPU(ctx, l.cpu, ink: ink, accent: accent)
+            }
         case .mem:
             if g.memIcon == .bars { drawBars(ctx, l.memBars, ink: ink) } else { drawRAM(ctx, l.memBars, ink: ink) }
         case .net:
             // Batang sinyal untuk internet: titik menyala = 1 batang, tiap busur = 1 batang lagi
             if g.netIcon == .bars { drawBars(ctx, l.netLevel > 0 ? l.netLevel + 1 : 0, ink: ink) } else { drawNet(ctx, l.netLevel, ink: ink) }
-        case .bat: drawBattery(ctx, l.bat ?? 0, ink: ink, fill: l.batWarn ? red : ink, charging: g.bolt && l.charging)
+        case .bat:
+            let fill = l.batWarn ? red : ink
+            let charging = g.bolt && l.charging
+            switch g.batIcon {
+            case .batV: drawBatteryV(ctx, l.bat ?? 0, ink: ink, fill: fill, charging: charging)
+            case .ring: drawBatteryRing(ctx, l.bat ?? 0, ink: ink, fill: fill, charging: charging)
+            case .pill: drawPill(ctx, l.bat ?? 0, ink: ink, fill: fill, charging: charging)
+            default: drawBattery(ctx, l.bat ?? 0, ink: ink, fill: fill, charging: charging)
+            }
         case .disk: drawDisk(ctx, l.diskFill, ink: ink, warn: l.diskWarn ? orange : nil)
         }
     }
@@ -543,7 +596,13 @@ enum GlyphRenderer {
         switch k {
         case .cpu, .mem: return 16
         case .net: return g.netIcon == .bars ? 16 : 18
-        case .bat: return 27
+        case .bat:
+            switch g.batIcon {
+            case .batV: return 12
+            case .ring: return 16
+            case .pill: return 8
+            default: return 27
+            }
         case .disk: return 14
         }
     }
@@ -588,18 +647,19 @@ enum GlyphRenderer {
     }
 
     /// RAM: 5 garis tegak sama tinggi yang berdempetan (seperti jalur keping memori); terisi dari kiri
-    private static func drawRAM(_ ctx: CGContext, _ lanes: Int, ink: NSColor) {
+    /// `on` = warna batang yang menyala (bawaan tinta; CPU memakai merah saat peringatan)
+    private static func drawRAM(_ ctx: CGContext, _ lanes: Int, ink: NSColor, on: NSColor? = nil) {
         for i in 0..<5 {
-            ctx.setFillColor((i < lanes ? ink : ink.withAlphaComponent(dim)).cgColor)
+            ctx.setFillColor((i < lanes ? (on ?? ink) : ink.withAlphaComponent(dim)).cgColor)
             ctx.addPath(CGPath(roundedRect: CGRect(x: 1 + CGFloat(i) * 2.9, y: 2.5, width: 2.1, height: 11), cornerWidth: 0.7, cornerHeight: 0.7, transform: nil))
             ctx.fillPath()
         }
     }
 
     /// 4 batang sinyal bertingkat (dulu ikon RAM); kini pilihan untuk RAM atau Internet
-    private static func drawBars(_ ctx: CGContext, _ bars: Int, ink: NSColor) {
+    private static func drawBars(_ ctx: CGContext, _ bars: Int, ink: NSColor, on: NSColor? = nil) {
         for (i, h) in [CGFloat(4), 7, 10, 13].enumerated() {
-            ctx.setFillColor((i < bars ? ink : ink.withAlphaComponent(dim)).cgColor)
+            ctx.setFillColor((i < bars ? (on ?? ink) : ink.withAlphaComponent(dim)).cgColor)
             ctx.addPath(CGPath(roundedRect: CGRect(x: 1 + CGFloat(i) * 3.6, y: 15 - h, width: 2.6, height: h), cornerWidth: 0.8, cornerHeight: 0.8, transform: nil))
             ctx.fillPath()
         }
@@ -638,22 +698,102 @@ enum GlyphRenderer {
             ctx.fillPath()
         }
         if charging {
-            let bolt = CGMutablePath()
-            bolt.addLines(between: [
-                CGPoint(x: 13.4, y: 2.2), CGPoint(x: 9.4, y: 8.6), CGPoint(x: 12.4, y: 8.6),
-                CGPoint(x: 10.8, y: 13.8), CGPoint(x: 15.2, y: 7), CGPoint(x: 12.2, y: 7)
-            ])
-            bolt.closeSubpath()
-            // Lubangi dulu sekeliling petir supaya terbaca di atas isian
+            drawBolt(ctx, cx: 12.3, cy: 8, k: 1, ink: ink)
+        }
+    }
+
+    /// Petir mengisi daya berpusat di (cx, cy) dengan skala k (k = 1: tinggi 11.6 unit).
+    /// Sejak 1.9.0 dipakai bersama oleh semua bentuk ikon baterai.
+    private static func drawBolt(_ ctx: CGContext, cx: CGFloat, cy: CGFloat, k: CGFloat, ink: NSColor) {
+        let pts: [CGPoint] = [
+            CGPoint(x: 13.4, y: 2.2), CGPoint(x: 9.4, y: 8.6), CGPoint(x: 12.4, y: 8.6),
+            CGPoint(x: 10.8, y: 13.8), CGPoint(x: 15.2, y: 7), CGPoint(x: 12.2, y: 7)
+        ].map { CGPoint(x: cx + ($0.x - 12.3) * k, y: cy + ($0.y - 8) * k) }
+        let bolt = CGMutablePath()
+        bolt.addLines(between: pts)
+        bolt.closeSubpath()
+        // Lubangi dulu sekeliling petir supaya terbaca di atas isian
+        ctx.saveGState()
+        ctx.setBlendMode(.clear)
+        ctx.setLineWidth(1.8 * k)
+        ctx.setLineJoin(.round)
+        ctx.addPath(bolt)
+        ctx.strokePath()
+        ctx.restoreGState()
+        ctx.setFillColor(ink.cgColor)
+        ctx.addPath(bolt)
+        ctx.fillPath()
+    }
+
+    /// Baterai vertikal (lebar 12 unit): kutub di atas, isian naik dari bawah
+    private static func drawBatteryV(_ ctx: CGContext, _ frac: Double, ink: NSColor, fill: NSColor, charging: Bool) {
+        let outline = ink.withAlphaComponent(0.45)
+        ctx.setLineWidth(1.2)
+        ctx.setStrokeColor(outline.cgColor)
+        ctx.addPath(CGPath(roundedRect: CGRect(x: 2, y: 3, width: 8, height: 12), cornerWidth: 2.2, cornerHeight: 2.2, transform: nil))
+        ctx.strokePath()
+        ctx.setFillColor(outline.cgColor)
+        ctx.addPath(CGPath(roundedRect: CGRect(x: 4.4, y: 1, width: 3.2, height: 1.6), cornerWidth: 0.8, cornerHeight: 0.8, transform: nil))
+        ctx.fillPath()
+        let fh = 8.8 * CGFloat(min(1, max(0, frac)))
+        if fh > 0.5 {
+            ctx.setFillColor(fill.cgColor)
+            ctx.addPath(CGPath(roundedRect: CGRect(x: 3.6, y: 13.4 - fh, width: 4.8, height: fh), cornerWidth: 1.2, cornerHeight: min(1.2, fh / 2), transform: nil))
+            ctx.fillPath()
+        }
+        if charging {
+            drawBolt(ctx, cx: 6, cy: 9, k: 0.72, ink: ink)
+        }
+    }
+
+    /// Baterai lingkaran: cincin seperti CPU, petir di tengah saat mengisi daya
+    private static func drawBatteryRing(_ ctx: CGContext, _ frac: Double, ink: NSColor, fill: NSColor, charging: Bool) {
+        strokeRing(ctx, cx: 8, cy: 8, r: 6, width: 2.2, frac: frac, ink: ink, accent: fill)
+        if charging {
+            drawBolt(ctx, cx: 8, cy: 8, k: 0.6, ink: ink)
+        }
+    }
+
+    /// Batang lurus (lebar 8 unit): kapsul tegak redup, isian naik dari bawah
+    private static func drawPill(_ ctx: CGContext, _ frac: Double, ink: NSColor, fill: NSColor, charging: Bool) {
+        let body = CGPath(roundedRect: CGRect(x: 1.5, y: 1.5, width: 5, height: 13), cornerWidth: 2.5, cornerHeight: 2.5, transform: nil)
+        ctx.setFillColor(ink.withAlphaComponent(dim).cgColor)
+        ctx.addPath(body)
+        ctx.fillPath()
+        let fh = 13 * CGFloat(min(1, max(0, frac)))
+        if fh > 0.3 {
             ctx.saveGState()
-            ctx.setBlendMode(.clear)
-            ctx.setLineWidth(1.8)
-            ctx.setLineJoin(.round)
-            ctx.addPath(bolt)
-            ctx.strokePath()
+            ctx.addPath(body)
+            ctx.clip()
+            ctx.setFillColor(fill.cgColor)
+            ctx.fill(CGRect(x: 1.5, y: 14.5 - fh, width: 5, height: fh))
             ctx.restoreGState()
-            ctx.setFillColor(ink.cgColor)
-            ctx.addPath(bolt)
+        }
+        if charging {
+            drawBolt(ctx, cx: 4, cy: 8, k: 0.62, ink: ink)
+        }
+    }
+
+    /// Kotak CPU: chip berkaki dengan 4 strip isian yang menyala dari bawah (0...4)
+    private static func drawChip(_ ctx: CGContext, _ level: Int, ink: NSColor, on: NSColor) {
+        ctx.setStrokeColor(ink.cgColor)
+        ctx.setLineWidth(1.2)
+        ctx.addPath(CGPath(roundedRect: CGRect(x: 2.6, y: 2.6, width: 10.8, height: 10.8), cornerWidth: 1.8, cornerHeight: 1.8, transform: nil))
+        ctx.strokePath()
+        // Kaki chip: 2 di tiap sisi
+        ctx.setLineWidth(1)
+        ctx.setLineCap(.round)
+        for p in [CGFloat(6), 10] {
+            ctx.move(to: CGPoint(x: p, y: 0.6)); ctx.addLine(to: CGPoint(x: p, y: 2))
+            ctx.move(to: CGPoint(x: p, y: 14)); ctx.addLine(to: CGPoint(x: p, y: 15.4))
+            ctx.move(to: CGPoint(x: 0.6, y: p)); ctx.addLine(to: CGPoint(x: 2, y: p))
+            ctx.move(to: CGPoint(x: 14, y: p)); ctx.addLine(to: CGPoint(x: 15.4, y: p))
+        }
+        ctx.strokePath()
+        for i in 0..<4 {
+            ctx.setFillColor((i < level ? on : ink.withAlphaComponent(dim)).cgColor)
+            let y = 10.7 - CGFloat(i) * 2.1
+            ctx.addPath(CGPath(roundedRect: CGRect(x: 4.6, y: y, width: 6.8, height: 1.5), cornerWidth: 0.6, cornerHeight: 0.6, transform: nil))
             ctx.fillPath()
         }
     }

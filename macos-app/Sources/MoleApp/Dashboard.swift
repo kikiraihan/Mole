@@ -1896,7 +1896,7 @@ struct IndicatorSettingsView: View {
             } header: {
                 Text("Glyph tunggal (B)")
             } footer: {
-                footnote("Cincin = panjang busur. Pusat = busur internet, baterai mini, atau angka (CPU/RAM %, storage % atau GB sisa). Titik = 5 titik terisi.")
+                footnote("Cincin = panjang busur. Pusat = busur internet, baterai mini, atau angka (CPU/RAM % atau angka, storage % atau GB sisa). Titik = 5 titik terisi.")
             }
         }
 
@@ -1906,11 +1906,17 @@ struct IndicatorSettingsView: View {
                     ForEach(GlyphLayout.allCases) { m in Text(m.title).tag(m) }
                 }
                 .pickerStyle(.segmented)
+                Picker("Ikon CPU", selection: $store.prefs.glyph.cpuIcon) {
+                    ForEach(GlyphPrefs.cpuIconOptions) { i in Text(i == .ring ? "Lingkaran (chip di tengah)" : i.title).tag(i) }
+                }
                 Picker("Ikon RAM", selection: $store.prefs.glyph.memIcon) {
                     ForEach(GlyphPrefs.memIconOptions) { i in Text(i.title).tag(i) }
                 }
                 Picker("Ikon Internet", selection: $store.prefs.glyph.netIcon) {
                     ForEach(GlyphPrefs.netIconOptions) { i in Text(i.title).tag(i) }
+                }
+                Picker("Ikon Baterai", selection: $store.prefs.glyph.batIcon) {
+                    ForEach(GlyphPrefs.batIconOptions) { i in Text(i.title).tag(i) }
                 }
             } header: {
                 Text("Glyph baris (A)")
@@ -1956,6 +1962,14 @@ struct IndicatorSettingsView: View {
 
         if showAdvanced {
             Section {
+                Picker("Angka CPU", selection: $store.prefs.glyph.cpuShowsNumber) {
+                    Text("Persen (%)").tag(false)
+                    Text("Angka (core terpakai)").tag(true)
+                }
+                Picker("Angka RAM", selection: $store.prefs.glyph.memShowsNumber) {
+                    Text("Persen (%)").tag(false)
+                    Text("Angka (GB terpakai)").tag(true)
+                }
                 Picker("Isian storage", selection: $store.prefs.glyph.diskShowsFree) {
                     Text("% terpakai").tag(false)
                     Text("% sisa").tag(true)
@@ -1970,6 +1984,8 @@ struct IndicatorSettingsView: View {
                 Toggle("Petir saat mengisi daya", isOn: $store.prefs.glyph.bolt)
             } header: {
                 Text("Cara membaca metrik")
+            } footer: {
+                footnote("Angka CPU/RAM berlaku untuk angka di samping glyph dan angka di pusat glyph tunggal (B); isian ikon tetap sebanding persennya. Core terpakai = persen CPU × jumlah core.")
             }
 
             Section {
