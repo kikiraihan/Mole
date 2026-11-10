@@ -111,7 +111,7 @@ jobs:
                ```
             Atau unduh **install-MoleApp.zip**, ekstrak, lalu jalankan `bash install-MoleApp.command`.
 
-            Klik kiri ikon di menu bar untuk ringkasan kesehatan & akses cepat, klik kanan untuk pengaturan indikator.
+            Klik kiri ikon di menu bar untuk ringkasan kesehatan & akses cepat, klik kanan untuk menu lengkap; semua pengaturan ada di Dashboard → Pengaturan.
             Mole CLI beserta binary Go sudah dibundle di dalam aplikasi.
           generate_release_notes: true
           files: |
@@ -119,7 +119,9 @@ jobs:
             macos-app/dist/install-MoleApp.zip
 
       - name: Rilis otomatis (push ke main dengan versi baru di Info.plist)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.ver.outputs.exists == 'false'
+        # Run workflow manual di main juga merilis bila tag versi belum ada, supaya push yang terlewat
+        # (mis. saat GitHub mematikan workflow di fork) bisa disusul dengan satu klik.
+        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && steps.ver.outputs.exists == 'false'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
@@ -134,7 +136,7 @@ jobs:
                ```
             Atau unduh **install-MoleApp.zip**, ekstrak, lalu jalankan `bash install-MoleApp.command`.
 
-            Klik kiri ikon di menu bar untuk ringkasan kesehatan & akses cepat, klik kanan untuk pengaturan indikator.
+            Klik kiri ikon di menu bar untuk ringkasan kesehatan & akses cepat, klik kanan untuk menu lengkap; semua pengaturan ada di Dashboard → Pengaturan.
             Mole CLI beserta binary Go sudah dibundle di dalam aplikasi.
           generate_release_notes: true
           files: |
