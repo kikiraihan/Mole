@@ -300,6 +300,7 @@ struct IndicatorPrefs: Equatable {
         "glyphDots": MetricKind.mem.rawValue,
         "glyphMemIcon": GlyphIcon.lanes.rawValue,
         "glyphNetIcon": GlyphIcon.fan.rawValue,
+        "glyphRowLayout": GlyphLayout.single.rawValue,
         "glyphDiskMode": "used",
         "glyphNetDirection": NetDirection.down.rawValue,
         "glyphNetPreset": "home",
@@ -347,6 +348,7 @@ struct IndicatorPrefs: Equatable {
         g.dots = kind(d.string(forKey: "glyphDots")).flatMap { GlyphPrefs.dotsOptions.contains($0) ? $0 : nil }
         if let i = GlyphIcon(rawValue: d.string(forKey: "glyphMemIcon") ?? ""), GlyphPrefs.memIconOptions.contains(i) { g.memIcon = i }
         if let i = GlyphIcon(rawValue: d.string(forKey: "glyphNetIcon") ?? ""), GlyphPrefs.netIconOptions.contains(i) { g.netIcon = i }
+        g.rowLayout = GlyphLayout(rawValue: d.string(forKey: "glyphRowLayout") ?? "") ?? .single
         g.diskShowsFree = d.string(forKey: "glyphDiskMode") == "free"
         g.netDirection = NetDirection(rawValue: d.string(forKey: "glyphNetDirection") ?? "") ?? .down
         g.netFast = d.string(forKey: "glyphNetPreset") == "fast"
@@ -379,6 +381,7 @@ struct IndicatorPrefs: Equatable {
         d.set(glyph.dots?.rawValue ?? "none", forKey: "glyphDots")
         d.set(glyph.memIcon.rawValue, forKey: "glyphMemIcon")
         d.set(glyph.netIcon.rawValue, forKey: "glyphNetIcon")
+        d.set(glyph.rowLayout.rawValue, forKey: "glyphRowLayout")
         d.set(glyph.diskShowsFree ? "free" : "used", forKey: "glyphDiskMode")
         d.set(glyph.netDirection.rawValue, forKey: "glyphNetDirection")
         d.set(glyph.netFast ? "fast" : "home", forKey: "glyphNetPreset")
