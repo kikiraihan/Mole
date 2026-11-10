@@ -271,6 +271,8 @@ final class LiveMetrics: ObservableObject {
     @Published var healthLoading = false
     /// Diisi Updater saat ada rilis MoleApp yang lebih baru (ditampilkan di popover)
     @Published var updateVersion: String?
+    /// Bagian yang diklik di glyph menu bar (disorot di popover); nil = klik biasa
+    @Published var focus: MetricKind?
 
     private var lastHealthAt: Date?
 
@@ -328,7 +330,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "Installer"
         case .slim: return "Slim Apps"
         case .history: return "Riwayat & Alat"
-        case .settings: return "Pengaturan Indikator"
+        case .settings: return "Pengaturan"
         }
     }
 
@@ -358,7 +360,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "File .dmg, .pkg, .iso, .xip, dan .zip yang tertinggal setelah instalasi."
         case .slim: return "Buang irisan Intel dari Universal App milik Anda di Apple Silicon."
         case .history: return "Apa saja yang sudah diubah Mole, plus pengaturan Touch ID, whitelist, dan completion."
-        case .settings: return "Pilih metrik di menu bar, mode tampilan, interval update, dan buka saat login."
+        case .settings: return "Semua pengaturan MoleApp: indikator menu bar, glyph, interaksi, dan buka saat login."
         }
     }
 }
@@ -1670,36 +1672,55 @@ struct HistoryView: View {
 // MARK: - Pengaturan Indikator
 // Pengaturan yang sama dengan menu klik kanan (kunci UserDefaults sama), jadi keduanya selalu sinkron.
 // Setiap perubahan dikirim lewat .indicatorSettingsChanged supaya AppDelegate langsung menggambar ulang menu bar.
+// Sejak 1.6.0 halaman ini menjadi satu-satunya tempat pengaturan (menu klik kanan dan ikon cog di popover
+// membuka halaman ini), dibagi per tab: Indikator, Glyph, Interaksi, Umum.
+
+/// Sumber tunggal pengaturan untuk halaman Pengaturan: setiap perubahan disimpan ke UserDefaults
+/// lalu dikabarkan ke AppDelegate.
+final class IndicatorSettingsStore: ObservableObject {
+    static let shared = IndicatorSettingsStore()
+
+    @Published var prefs: IndicatorPrefs {
+        didSet {
+            guard prefs != oldValue else { return }
+            prefs.save()
+            NotificationCenter.default.post(name: .indicatorSettingsChanged, object: nil)
+        }
+    }
+
+    private init() {
+        prefs = IndicatorPrefs.load()
+    }
+
+    func resetDefaults() {
+        let d = UserDefaults.standard
+        for k in IndicatorPrefs.registeredDefaults.keys { d.removeObject(forKey: k) }
+        // load() membaca nilai bawaan yang didaftarkan AppDelegate
+        prefs = IndicatorPrefs.load(d)
+        NotificationCenter.default.post(name: .indicatorSettingsChanged, object: nil)
+    }
+}
+
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case indicator, glyph, interaction, general
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .indicator: return "Indikator"
+        case .glyph: return "Glyph"
+        case .interaction: return "Interaksi"
+        case .general: return "Umum"
+        }
+    }
+}
 
 struct IndicatorSettingsView: View {
     @ObservedObject var live = LiveMetrics.shared
-    @AppStorage("cpu") private var cpu = true
-    @AppStorage("mem") private var mem = true
-    @AppStorage("disk") private var disk = true
-    @AppStorage("net") private var net = false
-    @AppStorage("bat") private var bat = false
-    @AppStorage("compact") private var compact = false
-    @AppStorage("interval") private var interval = 2.0
+    @ObservedObject var store = IndicatorSettingsStore.shared
+    @AppStorage("settingsTab") private var tab: SettingsTab = .indicator
+    @AppStorage("settingsAdvanced") private var showAdvanced = false
     @State private var loginOn = false
     @Environment(\.colorScheme) private var scheme
-
-    private var prefs: IndicatorPrefs {
-        IndicatorPrefs(cpu: cpu, mem: mem, disk: disk, net: net, bat: bat, compact: compact)
-    }
-
-    private func notify() {
-        NotificationCenter.default.post(name: .indicatorSettingsChanged, object: nil)
-    }
-
-    private func resetDefaults() {
-        let d = UserDefaults.standard
-        for k in ["cpu", "mem", "disk", "net", "bat", "compact", "interval"] { d.removeObject(forKey: k) }
-        // @AppStorage membaca nilai bawaan yang didaftarkan AppDelegate
-        cpu = d.bool(forKey: "cpu"); mem = d.bool(forKey: "mem"); disk = d.bool(forKey: "disk")
-        net = d.bool(forKey: "net"); bat = d.bool(forKey: "bat"); compact = d.bool(forKey: "compact")
-        interval = max(1.0, d.double(forKey: "interval"))
-        notify()
-    }
 
     private var loginBinding: Binding<Bool> {
         Binding(
@@ -1723,83 +1744,247 @@ struct IndicatorSettingsView: View {
             VStack(alignment: .leading, spacing: 16) {
                 PageHeader(.settings) {
                     Button {
-                        resetDefaults()
+                        store.resetDefaults()
                     } label: {
                         Label("Kembalikan bawaan", systemImage: "arrow.uturn.backward")
                     }
                 }
 
-                Panel("Pratinjau menu bar", symbol: "menubar.rectangle") {
-                    preview
+                Picker("", selection: $tab) {
+                    ForEach(SettingsTab.allCases) { t in
+                        Text(t.title).tag(t)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 420)
+
+                if tab != .general {
+                    Panel("Pratinjau menu bar", symbol: "menubar.rectangle") {
+                        preview
+                    }
                 }
 
-                HStack(alignment: .top, spacing: 16) {
-                    Panel("Tampilkan di menu bar", symbol: "checklist") {
-                        metricRow("CPU", "cpu", $cpu)
-                        metricRow("Memori (RAM)", "memorychip", $mem)
-                        metricRow("Sisa SSD", "internaldrive", $disk)
-                        metricRow("Kecepatan Jaringan", "arrow.up.arrow.down", $net)
-                        metricRow("Baterai", "battery.100", $bat)
-                        if bat && live.battery == nil {
-                            Note(text: "Baterai internal tidak terdeteksi, jadi metrik ini tidak tampil di Mac ini.", symbol: "exclamationmark.circle")
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 16) {
-                        Panel("Tampilan", symbol: "textformat.size") {
-                            Picker("", selection: $compact) {
-                                Text("2 baris (label di atas, nilai di bawah)").tag(false)
-                                Text("Ringkas (1 baris, ikon + angka)").tag(true)
-                            }
-                            .pickerStyle(.radioGroup)
-                            .labelsHidden()
-                        }
-                        Panel("Interval update", symbol: "timer") {
-                            Picker("", selection: $interval) {
-                                ForEach(indicatorIntervals, id: \.self) { s in
-                                    Text("\(Int(s)) detik").tag(s)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                            Note(text: "Interval lebih panjang lebih hemat CPU dan baterai. Disk dibaca tiap 15 update, baterai tiap 5 update.")
-                        }
-                        Panel("Umum", symbol: "gearshape") {
-                            Toggle("Buka saat login", isOn: loginBinding)
-                                .toggleStyle(.switch)
-                        }
-                    }
+                switch tab {
+                case .indicator: indicatorTab
+                case .glyph: glyphTab
+                case .interaction: interactionTab
+                case .general: generalTab
                 }
             }
             .padding(24)
         }
         .onAppear { loginOn = SMAppService.mainApp.status == .enabled }
-        .onChange(of: prefs) { _ in notify() }
-        .onChange(of: interval) { _ in notify() }
     }
 
-    private func metricRow(_ title: String, _ symbol: String, _ isOn: Binding<Bool>) -> some View {
-        HStack {
-            Label(title, systemImage: symbol)
-            Spacer()
-            Toggle("", isOn: isOn).toggleStyle(.switch).labelsHidden()
+    // MARK: Tab Indikator
+
+    private var indicatorTab: some View {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 16) {
+                Panel("Gaya tampilan", symbol: "textformat.size") {
+                    Picker("", selection: $store.prefs.style) {
+                        ForEach(IndicatorStyle.allCases) { st in
+                            Text("\(st.title) — \(st.detail)").tag(st)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .labelsHidden()
+                }
+                Panel("Interval update", symbol: "timer") {
+                    Picker("", selection: $store.prefs.interval) {
+                        ForEach(indicatorIntervals, id: \.self) { s in
+                            Text("\(Int(s)) detik").tag(s)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    Note(text: "Interval lebih panjang lebih hemat CPU dan baterai. Disk dibaca tiap 15 update, baterai tiap 5 update.")
+                }
+            }
+
+            Panel("Tampilkan di menu bar & urutan", symbol: "checklist") {
+                ForEach(Array(store.prefs.order.enumerated()), id: \.element) { i, k in
+                    metricRow(k, index: i)
+                }
+                if store.prefs.bat && live.battery == nil {
+                    Note(text: "Baterai internal tidak terdeteksi, jadi metrik ini tidak tampil di Mac ini.", symbol: "exclamationmark.circle")
+                }
+                if store.prefs.style == .glyphSingle {
+                    Note(text: "Glyph tunggal (B) memakai isi slot di tab Glyph, bukan daftar ini.")
+                }
+            }
         }
     }
 
+    private func metricRow(_ k: MetricKind, index: Int) -> some View {
+        HStack(spacing: 6) {
+            Label(k.title, systemImage: k.symbol)
+            Spacer()
+            Button { move(k, -1) } label: { Image(systemName: "chevron.up") }
+                .buttonStyle(.borderless)
+                .disabled(index == 0)
+                .help("Pindah ke kiri")
+            Button { move(k, 1) } label: { Image(systemName: "chevron.down") }
+                .buttonStyle(.borderless)
+                .disabled(index == store.prefs.order.count - 1)
+                .help("Pindah ke kanan")
+            Toggle("", isOn: Binding(get: { store.prefs.isOn(k) }, set: { store.prefs.set(k, $0) }))
+                .toggleStyle(.switch)
+                .labelsHidden()
+        }
+    }
+
+    private func move(_ k: MetricKind, _ d: Int) {
+        var o = store.prefs.order
+        guard let i = o.firstIndex(of: k), o.indices.contains(i + d) else { return }
+        o.swapAt(i, i + d)
+        store.prefs.order = o
+    }
+
+    // MARK: Tab Glyph
+
+    private var glyphTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if !store.prefs.style.isGlyph {
+                Note(text: "Pengaturan ini berlaku untuk gaya Glyph baris (A) dan Glyph tunggal (B). Pilih gayanya di tab Indikator.", symbol: "info.circle")
+            }
+            HStack(alignment: .top, spacing: 16) {
+                Panel("Glyph tunggal (B): isi slot", symbol: "circle.dotted") {
+                    Picker("Cincin", selection: $store.prefs.glyph.ring) {
+                        ForEach(GlyphPrefs.ringOptions) { k in Text(k.short).tag(k) }
+                    }
+                    Picker("Pusat", selection: $store.prefs.glyph.center) {
+                        ForEach(GlyphPrefs.centerOptions) { k in Text(k.short).tag(Optional(k)) }
+                        Text("Kosong").tag(MetricKind?.none)
+                    }
+                    Picker("Titik", selection: $store.prefs.glyph.dots) {
+                        ForEach(GlyphPrefs.dotsOptions) { k in Text(k.short).tag(Optional(k)) }
+                        Text("Kosong").tag(MetricKind?.none)
+                    }
+                    Note(text: "Cincin = panjang busur, pusat = busur internet atau baterai mini, titik = 5 titik terisi.")
+                }
+                Panel("Warna peringatan", symbol: "exclamationmark.triangle") {
+                    Toggle("Warnai bagian yang kritis", isOn: $store.prefs.glyph.warnColors)
+                        .toggleStyle(.switch)
+                    Note(text: "Mati = ikon murni monokrom seperti ikon sistem. Hidup = hanya bagian kritis yang diwarnai (baterai merah, disk oranye). Ambangnya ada di Lanjutan.")
+                }
+            }
+
+            DisclosureGroup(isExpanded: $showAdvanced) {
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .top, spacing: 16) {
+                        Panel("Cara membaca metrik", symbol: "ruler") {
+                            Picker("Isian storage", selection: $store.prefs.glyph.diskShowsFree) {
+                                Text("% terpakai").tag(false)
+                                Text("% sisa").tag(true)
+                            }
+                            Picker("Arah internet", selection: $store.prefs.glyph.netDirection) {
+                                ForEach(NetDirection.allCases) { d in Text(d.title).tag(d) }
+                            }
+                            Picker("Ambang busur", selection: $store.prefs.glyph.netFast) {
+                                Text("Rumahan (10 KB/s · 1 MB/s · 10 MB/s)").tag(false)
+                                Text("Cepat (100 KB/s · 10 MB/s · 100 MB/s)").tag(true)
+                            }
+                            Toggle("Petir saat mengisi daya", isOn: $store.prefs.glyph.bolt)
+                        }
+                        Panel("Angka di samping glyph", symbol: "number") {
+                            ForEach(MetricKind.allCases) { k in
+                                Toggle(k.title, isOn: numberBinding(k))
+                            }
+                            Note(text: "Pada glyph tunggal (B), angka hanya tampil untuk metrik di cincin.")
+                        }
+                    }
+                    HStack(alignment: .top, spacing: 16) {
+                        Panel("Ambang peringatan", symbol: "dial.medium") {
+                            Stepper(value: $store.prefs.glyph.warnBattery, in: 5...50, step: 5) {
+                                Text("Baterai merah di bawah \(store.prefs.glyph.warnBattery)%")
+                            }
+                            Stepper(value: $store.prefs.glyph.warnDisk, in: 1...30, step: 1) {
+                                Text("Disk oranye bila sisa di bawah \(store.prefs.glyph.warnDisk)%")
+                            }
+                            Toggle("Peringatan CPU tinggi", isOn: $store.prefs.glyph.warnCPUOn)
+                            Stepper(value: $store.prefs.glyph.warnCPU, in: 50...100, step: 5) {
+                                Text("CPU merah di atas \(store.prefs.glyph.warnCPU)%")
+                            }
+                            .disabled(!store.prefs.glyph.warnCPUOn)
+                        }
+                        .disabled(!store.prefs.glyph.warnColors)
+                        Panel("Ukuran", symbol: "arrow.up.left.and.arrow.down.right") {
+                            Picker("Ukuran glyph", selection: $store.prefs.glyph.small) {
+                                Text("Standar").tag(false)
+                                Text("Kecil").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            Picker("Jarak antar glyph", selection: $store.prefs.glyph.tight) {
+                                Text("Normal").tag(false)
+                                Text("Rapat").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                        }
+                    }
+                }
+                .padding(.top, 8)
+            } label: {
+                Text("Lanjutan").font(.headline)
+            }
+        }
+    }
+
+    private func numberBinding(_ k: MetricKind) -> Binding<Bool> {
+        Binding(
+            get: { store.prefs.glyph.numbers.contains(k) },
+            set: { on in
+                if on { store.prefs.glyph.numbers.insert(k) } else { store.prefs.glyph.numbers.remove(k) }
+            }
+        )
+    }
+
+    // MARK: Tab Interaksi
+
+    private var interactionTab: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if !store.prefs.style.isGlyph {
+                Note(text: "Klik dan tooltip per bagian hanya berlaku untuk gaya glyph. Pada gaya teks, klik kiri selalu membuka popover biasa.", symbol: "info.circle")
+            }
+            Panel("Klik & hover di menu bar", symbol: "cursorarrow.click") {
+                Toggle("Klik per bagian membuka popover di bagian itu", isOn: $store.prefs.glyph.clickRegions)
+                    .toggleStyle(.switch)
+                Toggle("Tooltip angka tepat saat kursor di atas bagian", isOn: $store.prefs.glyph.tooltips)
+                    .toggleStyle(.switch)
+                Note(text: "Klik kanan (atau Control-klik) tetap membuka menu: dashboard, fitur Mole CLI, Pengaturan, pembaruan, dan keluar.")
+            }
+        }
+    }
+
+    // MARK: Tab Umum
+
+    private var generalTab: some View {
+        Panel("Umum", symbol: "gearshape") {
+            Toggle("Buka saat login", isOn: loginBinding)
+                .toggleStyle(.switch)
+            Note(text: "Pembaruan MoleApp dicek otomatis saat dibuka lalu sehari sekali; cek manual ada di menu klik kanan.")
+        }
+    }
+
+    // MARK: Pratinjau
+
     /// Gambar indikator memakai renderer yang sama dengan menu bar, dengan angka live saat ini
     private var preview: some View {
-        let layout = IndicatorLayout(
-            prefs, cpu: live.cpu, memPercent: live.memPercent, diskFree: live.disk.free,
-            up: live.netUp, down: live.netDown, bat: live.battery
+        let values = MetricValues(
+            cpu: live.cpu, memPercent: live.memPercent, memUsed: live.memUsed, memTotal: live.memTotal,
+            disk: live.disk, up: live.netUp, down: live.netDown, bat: live.battery
         )
-        let img = layout.render()
+        let layout = IndicatorLayout(store.prefs, values, dark: scheme == .dark)
+        let rendered = layout.render()
+        let img = rendered?.image
             ?? NSImage(systemSymbolName: "sparkles.rectangle.stack.fill", accessibilityDescription: "MoleApp")
             ?? NSImage(size: NSSize(width: 16, height: 16))
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Spacer()
                 Image(nsImage: img)
-                    .renderingMode(.template)
+                    .renderingMode(img.isTemplate || rendered == nil ? .template : .original)
                     .foregroundStyle(scheme == .dark ? Color.white : Color.black)
                     .padding(.horizontal, 10)
                     .frame(height: 24)
