@@ -662,10 +662,28 @@ final class MoleBridge {
         let escaped = fullCmd
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+        // 1.10.1: kalau Terminal belum berjalan, `activate` membukanya beserta satu jendela kosong,
+        // lalu `do script` tanpa target membuat jendela kedua. Jadi saat Terminal baru dibuka,
+        // tunggu jendela bawaannya dan jalankan perintah di sana (selama tab-nya tidak sibuk).
         let script = """
+        set wasRunning to application "Terminal" is running
         tell application "Terminal"
             activate
-            do script "\(escaped)"
+            set targetWindow to missing value
+            if not wasRunning then
+                repeat 50 times
+                    if (count of windows) > 0 then exit repeat
+                    delay 0.1
+                end repeat
+                if (count of windows) > 0 then
+                    if not (busy of selected tab of window 1) then set targetWindow to window 1
+                end if
+            end if
+            if targetWindow is missing value then
+                do script "\(escaped)"
+            else
+                do script "\(escaped)" in targetWindow
+            end if
         end tell
         """
         let proc = Process()
