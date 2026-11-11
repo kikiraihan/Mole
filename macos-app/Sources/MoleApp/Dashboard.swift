@@ -254,6 +254,48 @@ enum MemProcessSampler {
     }
 }
 
+// MARK: - Proses terberat untuk popover (1.10.0)
+// Satu panggilan ps memberi daftar CPU dan RAM sekaligus; dipanggil hanya selama popover terbuka.
+
+struct TopProcess: Identifiable, Equatable {
+    let id: Int
+    let name: String
+    /// Persen CPU dari ps (bisa di atas 100% untuk proses multi-core)
+    let cpu: Double
+    let rssBytes: Int64
+    let memPercent: Double
+}
+
+enum TopProcessSampler {
+    static func sample(limit: Int, completion: @escaping (_ byCPU: [TopProcess], _ byMem: [TopProcess]) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+            proc.arguments = ["-Aco", "pid=,pcpu=,rss=,pmem=,comm="]
+            let out = Pipe()
+            proc.standardOutput = out
+            proc.standardError = FileHandle.nullDevice
+            var all: [TopProcess] = []
+            if (try? proc.run()) != nil {
+                let data = out.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                let ownPID = Int(proc.processIdentifier)
+                for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+                    let f = line.split(separator: " ", maxSplits: 4, omittingEmptySubsequences: true)
+                    guard f.count == 5, let pid = Int(f[0]), pid != ownPID, let rss = Int64(f[2]) else { continue }
+                    // ps bisa memakai koma desimal pada locale tertentu
+                    let cpu = Double(f[1].replacingOccurrences(of: ",", with: ".")) ?? 0
+                    let pmem = Double(f[3].replacingOccurrences(of: ",", with: ".")) ?? 0
+                    all.append(TopProcess(id: pid, name: String(f[4]), cpu: cpu, rssBytes: rss * 1024, memPercent: pmem))
+                }
+            }
+            let byCPU = Array(all.sorted { $0.cpu > $1.cpu }.prefix(limit))
+            let byMem = Array(all.sorted { $0.rssBytes > $1.rssBytes }.prefix(limit))
+            DispatchQueue.main.async { completion(byCPU, byMem) }
+        }
+    }
+}
+
 // MARK: - Live Metrics (dibagi antara indikator menu bar, popover, dan dashboard)
 
 final class LiveMetrics: ObservableObject {
@@ -273,8 +315,12 @@ final class LiveMetrics: ObservableObject {
     @Published var updateVersion: String?
     /// Bagian yang diklik di glyph menu bar (disorot di popover); nil = klik biasa
     @Published var focus: MetricKind?
+    /// Proses terberat untuk popover (1.10.0), diisi refreshProcesses()
+    @Published var topCPU: [TopProcess] = []
+    @Published var topMem: [TopProcess] = []
 
     private var lastHealthAt: Date?
+    private var procLoading = false
 
     var memPercent: Double {
         memTotal > 0 ? Double(memUsed) / Double(memTotal) * 100.0 : 0
@@ -308,6 +354,21 @@ final class LiveMetrics: ObservableObject {
             guard let self else { return }
             self.healthLoading = false
             if let d = json as? [String: Any] { self.applyStatus(d) }
+        }
+    }
+
+    /// Membaca proses terberat (CPU dan RAM) dari ps; dilewati bila kedua daftar dimatikan di Pengaturan > Popover.
+    func refreshProcesses() {
+        let d = UserDefaults.standard
+        let wantCPU = d.bool(forKey: PopoverPrefs.showTopCPU)
+        let wantMem = d.bool(forKey: PopoverPrefs.showTopMem)
+        guard wantCPU || wantMem, !procLoading else { return }
+        procLoading = true
+        TopProcessSampler.sample(limit: PopoverPrefs.countRange.upperBound) { [weak self] byCPU, byMem in
+            guard let self else { return }
+            self.procLoading = false
+            if wantCPU, self.topCPU != byCPU { self.topCPU = byCPU }
+            if wantMem, self.topMem != byMem { self.topMem = byMem }
         }
     }
 }
@@ -360,7 +421,7 @@ enum Feature: Int, CaseIterable, Identifiable, Hashable {
         case .installer: return "File .dmg, .pkg, .iso, .xip, dan .zip yang tertinggal setelah instalasi."
         case .slim: return "Buang irisan Intel dari Universal App milik Anda di Apple Silicon."
         case .history: return "Apa saja yang sudah diubah Mole, plus pengaturan Touch ID, whitelist, dan completion."
-        case .settings: return "Semua pengaturan MoleApp: indikator menu bar, glyph, interaksi, buka saat login, pembaruan, uninstall, dan keluar."
+        case .settings: return "Semua pengaturan MoleApp: indikator menu bar, glyph, interaksi, isi popover, buka saat login, pembaruan, uninstall, dan keluar."
         }
     }
 }
@@ -1710,11 +1771,13 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     // uninstall, keluar: semua isi menu klik kanan yang belum ada di sidebar)
     // 1.8.0: tab Glyph digabung ke Indikator. Nilai lama "glyph" di UserDefaults tidak dikenali lagi,
     // jadi @AppStorage kembali ke bawaan (.indicator).
-    case indicator, app
+    // 1.10.0: tab Popover untuk mengatur isi popover klik kiri (meter, proses terberat, akses cepat)
+    case indicator, popover, app
     var id: String { rawValue }
     var title: String {
         switch self {
         case .indicator: return "Indikator"
+        case .popover: return "Popover"
         case .app: return "Aplikasi"
         }
     }
@@ -1758,6 +1821,7 @@ struct IndicatorSettingsView: View {
                 case .indicator:
                     indicatorTab
                     glyphTab
+                case .popover: PopoverSettingsSections()
                 case .app: appTab
                 }
             }
@@ -1785,12 +1849,17 @@ struct IndicatorSettingsView: View {
             Spacer(minLength: 8)
             preview
             Button {
-                store.resetDefaults()
+                // Tab Popover punya bawaan sendiri; tab lain tetap mengembalikan pengaturan indikator
+                if tab == .popover {
+                    PopoverPrefs.resetDefaults()
+                } else {
+                    store.resetDefaults()
+                }
             } label: {
                 Image(systemName: "arrow.uturn.backward")
             }
             .buttonStyle(.borderless)
-            .help("Kembalikan pengaturan indikator ke bawaan")
+            .help(tab == .popover ? "Kembalikan isi popover ke bawaan" : "Kembalikan pengaturan indikator ke bawaan")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

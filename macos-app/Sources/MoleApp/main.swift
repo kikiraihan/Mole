@@ -1027,6 +1027,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         // `compact` lama → `indicatorStyle`; harus sebelum register supaya hanya nilai tersimpan yang dibaca
         IndicatorPrefs.migrateLegacy(defaults)
         defaults.register(defaults: IndicatorPrefs.registeredDefaults)
+        // Isi popover (1.10.0): register() menggabungkan, jadi bawaan indikator di atas tetap ada
+        defaults.register(defaults: PopoverPrefs.registeredDefaults)
         prefs = IndicatorPrefs.load(defaults)
 
         // Klik kiri: popover ringkas; klik kanan (atau Control-klik): menu lengkap
@@ -1132,7 +1134,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         LiveMetrics.shared.focus = focus
         tick()
         pushLive()
-        LiveMetrics.shared.refreshHealth()
+        // mo status cukup mahal: lewati bila skor kesehatan disembunyikan di Pengaturan > Popover
+        if UserDefaults.standard.bool(forKey: PopoverPrefs.showHealth) {
+            LiveMetrics.shared.refreshHealth()
+        }
+        LiveMetrics.shared.refreshProcesses()
         popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         NSApp.activate(ignoringOtherApps: true)
@@ -1179,6 +1185,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         let dashboardVisible = dashboardLoaded && dashboard.isOnScreen
         if popoverVisible || dashboardVisible {
             pushLive()
+        }
+        // Daftar proses terberat di popover ikut diperbarui tiap tick, hanya selama popover terbuka
+        if popoverVisible {
+            LiveMetrics.shared.refreshProcesses()
         }
     }
 
