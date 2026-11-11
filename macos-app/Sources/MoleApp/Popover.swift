@@ -27,6 +27,10 @@ enum PopoverPrefs {
     static let topCPUCount = "popTopCPUCount"
     static let showTopMem = "popShowTopMem"
     static let topMemCount = "popTopMemCount"
+    /// Nilai di daftar proses (1.11.0): CPU persen (bawaan) atau angka (core terpakai),
+    /// RAM angka (bawaan, MB/GB) atau persen dari total RAM
+    static let topCPUAsNumber = "popTopCPUAsNumber"
+    static let topMemAsNumber = "popTopMemAsNumber"
     static let showQuick = "popShowQuick"
     static let quickItems = "popQuickItems"
     static let quickIconsOnly = "popQuickIconsOnly"
@@ -49,6 +53,8 @@ enum PopoverPrefs {
         topCPUCount: 3,
         showTopMem: true,
         topMemCount: 3,
+        topCPUAsNumber: false,
+        topMemAsNumber: true,
         showQuick: true,
         quickItems: defaultQuickRaw,
         quickIconsOnly: false
@@ -68,6 +74,12 @@ enum PopoverPrefs {
             out.append(f)
         }
         return out
+    }
+
+    /// Persen CPU ps → core terpakai (100% = 1 core). 2 desimal di bawah 10 core, contoh "0.48 core"
+    static func formatCores(_ pcpu: Double) -> String {
+        let c = max(0, pcpu) / 100
+        return c < 9.995 ? String(format: "%.2f core", c) : String(format: "%.1f core", c)
     }
 
     static func clampCount(_ n: Int) -> Int {
@@ -124,7 +136,7 @@ struct ProcessMiniList: View {
             .frame(width: 56, height: 5)
             Text(value)
                 .monospacedDigit()
-                .frame(width: 58, alignment: .trailing)
+                .frame(width: 64, alignment: .trailing)
         }
         .font(.system(.caption, design: .rounded))
     }
@@ -182,6 +194,8 @@ struct PopoverView: View {
     @AppStorage(PopoverPrefs.topCPUCount) private var topCPUCount = 3
     @AppStorage(PopoverPrefs.showTopMem) private var showTopMem = true
     @AppStorage(PopoverPrefs.topMemCount) private var topMemCount = 3
+    @AppStorage(PopoverPrefs.topCPUAsNumber) private var topCPUAsNumber = false
+    @AppStorage(PopoverPrefs.topMemAsNumber) private var topMemAsNumber = true
     @AppStorage(PopoverPrefs.showQuick) private var showQuick = true
     @AppStorage(PopoverPrefs.quickItems) private var quickRaw = PopoverPrefs.defaultQuickRaw
     @AppStorage(PopoverPrefs.quickIconsOnly) private var quickIconsOnly = false
@@ -326,7 +340,7 @@ struct PopoverView: View {
                     symbol: "cpu",
                     rows: live.topCPU,
                     count: PopoverPrefs.clampCount(topCPUCount),
-                    value: { String(format: "%.1f%%", $0.cpu) },
+                    value: { topCPUAsNumber ? PopoverPrefs.formatCores($0.cpu) : String(format: "%.1f%%", $0.cpu) },
                     amount: { $0.cpu },
                     tint: { Palette.level($0.cpu) }
                 )
@@ -337,7 +351,7 @@ struct PopoverView: View {
                     symbol: "memorychip",
                     rows: live.topMem,
                     count: PopoverPrefs.clampCount(topMemCount),
-                    value: { formatBytes($0.rssBytes) },
+                    value: { topMemAsNumber ? formatBytes($0.rssBytes) : String(format: "%.1f%%", $0.memPercent) },
                     amount: { Double($0.rssBytes) },
                     tint: { Palette.level($0.memPercent, warn: 10, crit: 20) }
                 )
@@ -366,6 +380,8 @@ struct PopoverSettingsSections: View {
     @AppStorage(PopoverPrefs.topCPUCount) private var topCPUCount = 3
     @AppStorage(PopoverPrefs.showTopMem) private var showTopMem = true
     @AppStorage(PopoverPrefs.topMemCount) private var topMemCount = 3
+    @AppStorage(PopoverPrefs.topCPUAsNumber) private var topCPUAsNumber = false
+    @AppStorage(PopoverPrefs.topMemAsNumber) private var topMemAsNumber = true
     @AppStorage(PopoverPrefs.showQuick) private var showQuick = true
     @AppStorage(PopoverPrefs.quickItems) private var quickRaw = PopoverPrefs.defaultQuickRaw
     @AppStorage(PopoverPrefs.quickIconsOnly) private var quickIconsOnly = false
@@ -395,15 +411,25 @@ struct PopoverSettingsSections: View {
                 Text("Jumlah baris CPU: \(PopoverPrefs.clampCount(topCPUCount))")
             }
             .disabled(!showTopCPU)
+            Picker("Nilai CPU", selection: $topCPUAsNumber) {
+                Text("Persen (%)").tag(false)
+                Text("Angka (core terpakai)").tag(true)
+            }
+            .disabled(!showTopCPU)
             Toggle("Proses terberat menurut RAM", isOn: $showTopMem)
             Stepper(value: countBinding($topMemCount), in: PopoverPrefs.countRange) {
                 Text("Jumlah baris RAM: \(PopoverPrefs.clampCount(topMemCount))")
             }
             .disabled(!showTopMem)
+            Picker("Nilai RAM", selection: $topMemAsNumber) {
+                Text("Persen (% dari total RAM)").tag(false)
+                Text("Angka (MB/GB terpakai)").tag(true)
+            }
+            .disabled(!showTopMem)
         } header: {
             Text("Proses terberat")
         } footer: {
-            note("Dibaca dari ps setiap interval update, hanya selama popover terbuka. Persen CPU per proses bisa di atas 100% untuk proses yang memakai banyak core. Daftar lengkap ada di halaman Kesehatan.")
+            note("Dibaca dari ps setiap interval update, hanya selama popover terbuka. Persen CPU per proses bisa di atas 100% untuk proses yang memakai banyak core; core terpakai = persen CPU ÷ 100. Daftar lengkap ada di halaman Kesehatan.")
         }
 
         Section {
