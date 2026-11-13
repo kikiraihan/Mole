@@ -959,7 +959,7 @@ final class DashboardWindowController: NSObject, NSWindowDelegate {
 
 // MARK: - 6. Menu Bar Indicator AppDelegate (Ala LiteMonitor + Mole Quick Actions)
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSViewToolTipOwner {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSViewToolTipOwner, NSPopoverDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     let menu = NSMenu()
     let defaults = UserDefaults.standard
@@ -979,6 +979,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         let p = NSPopover()
         p.behavior = .transient
         p.animates = true
+        p.delegate = self
         let actions = PopoverActions(
             openTab: { [weak self] tab in
                 guard let self else { return }
@@ -1014,6 +1015,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         return p
     }()
     private var popoverLoaded = false
+    // 1.11.1: klik di luar popover (indikator lain / aplikasi lain / desktop) → tutup
+    private var outsideClickMonitor: Any?
+    private var popoverLastClose = Date.distantPast
 
     private let cpuSampler = CPUSampler()
     private let netSampler = NetSampler()
@@ -1149,6 +1153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
             popover.performClose(nil)
             return
         }
+        // klik ikon saat popover terbuka: popover sudah ditutup oleh klik itu sendiri → jangan buka lagi
+        if Date().timeIntervalSince(popoverLastClose) < 0.3 { return }
         LiveMetrics.shared.focus = focus
         tick()
         pushLive()
@@ -1160,6 +1166,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSView
         popover.show(relativeTo: btn.bounds, of: btn, preferredEdge: .minY)
         popover.contentViewController?.view.window?.makeKey()
         NSApp.activate(ignoringOtherApps: true)
+        // 1.11.1: .transient tidak selalu menutup popover saat klik indikator menu bar lain
+        // (terutama indikator native seperti Wi-Fi, Control Center, jam) atau aplikasi lain,
+        // karena aplikasi menu bar sering tidak benar-benar aktif. Pantau klik global juga.
+        if outsideClickMonitor == nil {
+            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+                self?.popover.performClose(nil)
+            }
+        }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        popoverLastClose = Date()
+        if let m = outsideClickMonitor {
+            NSEvent.removeMonitor(m)
+            outsideClickMonitor = nil
+        }
     }
 
     fileprivate func showMenu() {
